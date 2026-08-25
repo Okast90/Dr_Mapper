@@ -1,0 +1,9 @@
+{
+  "name": "DJI Mapper",
+  "short_name": "DJI Mapper",
+  "start_url": ".",
+  "display": "standalone",
+  "description": "Plan Survey & Photogrammetry Missions to use directly on your DJI Drone from the DJI Fly app",
+  "orientation": "portrait-primary",
+  "prefer_related_applications": false
+}
