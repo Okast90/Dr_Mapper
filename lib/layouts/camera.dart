@@ -184,38 +184,52 @@ class _CameraBarState extends State<CameraBar> {
                 ),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             _buildSectionCard(
               context: context,
-              title: 'Sensor',
+              title: 'Sensor Parameters',
               child: Column(
                 children: [
-                  CustomTextField(
-                    labelText: 'Sensor Width (mm)',
-                    min: 1,
-                    max: 50,
-                    onChanged: (mm) {
-                      listenables.sensorWidth = mm;
-                      _updatePreset(listenables);
-                    },
-                    defaultValue: listenables.sensorWidth,
-                    decimals: 1,
-                    enabled: !listenables.selectedCameraPreset!.defaultPreset,
+                  Row(
+                    children: [
+                      Expanded(
+                        child: CustomTextField(
+                          labelText: 'Sensor Width',
+                          unit: 'mm',
+                          min: 1,
+                          max: 50,
+                          onChanged: (mm) {
+                            listenables.sensorWidth = mm;
+                            _updatePreset(listenables);
+                          },
+                          defaultValue: listenables.sensorWidth,
+                          decimals: 1,
+                          enabled:
+                              !listenables.selectedCameraPreset!.defaultPreset,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: CustomTextField(
+                          labelText: 'Sensor Height',
+                          unit: 'mm',
+                          min: 1,
+                          max: 50,
+                          defaultValue: listenables.sensorHeight,
+                          onChanged: (mm) {
+                            listenables.sensorHeight = mm;
+                            _updatePreset(listenables);
+                          },
+                          decimals: 1,
+                          enabled:
+                              !listenables.selectedCameraPreset!.defaultPreset,
+                        ),
+                      ),
+                    ],
                   ),
                   CustomTextField(
-                    labelText: 'Sensor Height (mm)',
-                    min: 1,
-                    max: 50,
-                    defaultValue: listenables.sensorHeight,
-                    onChanged: (mm) {
-                      listenables.sensorHeight = mm;
-                      _updatePreset(listenables);
-                    },
-                    decimals: 1,
-                    enabled: !listenables.selectedCameraPreset!.defaultPreset,
-                  ),
-                  CustomTextField(
-                    labelText: 'Focal Length (mm)',
+                    labelText: 'Focal Length',
+                    unit: 'mm',
                     min: 1,
                     max: 50,
                     defaultValue: listenables.focalLength,
@@ -229,35 +243,42 @@ class _CameraBarState extends State<CameraBar> {
                 ],
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             _buildSectionCard(
               context: context,
-              title: 'Image output',
-              child: Column(
+              title: 'Image Output',
+              child: Row(
                 children: [
-                  CustomTextField(
-                    labelText: 'Image Width (px)',
-                    min: 100,
-                    max: 99999,
-                    onChanged: (px) {
-                      listenables.imageWidth = px.toInt();
-                      _updatePreset(listenables);
-                    },
-                    defaultValue: listenables.imageWidth.toDouble(),
-                    enabled: !listenables.selectedCameraPreset!.defaultPreset,
-                    maxLength: 5,
+                  Expanded(
+                    child: CustomTextField(
+                      labelText: 'Image Width',
+                      unit: 'px',
+                      min: 100,
+                      max: 999999,
+                      onChanged: (px) {
+                        listenables.imageWidth = px.toInt();
+                        _updatePreset(listenables);
+                      },
+                      defaultValue: listenables.imageWidth.toDouble(),
+                      enabled: !listenables.selectedCameraPreset!.defaultPreset,
+                      maxLength: 6,
+                    ),
                   ),
-                  CustomTextField(
-                    labelText: 'Image Height (px)',
-                    min: 100,
-                    max: 99999,
-                    defaultValue: listenables.imageHeight.toDouble(),
-                    onChanged: (px) {
-                      listenables.imageHeight = px.toInt();
-                      _updatePreset(listenables);
-                    },
-                    enabled: !listenables.selectedCameraPreset!.defaultPreset,
-                    maxLength: 5,
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: CustomTextField(
+                      labelText: 'Image Height',
+                      unit: 'px',
+                      min: 100,
+                      max: 999999,
+                      defaultValue: listenables.imageHeight.toDouble(),
+                      onChanged: (px) {
+                        listenables.imageHeight = px.toInt();
+                        _updatePreset(listenables);
+                      },
+                      enabled: !listenables.selectedCameraPreset!.defaultPreset,
+                      maxLength: 6,
+                    ),
                   ),
                 ],
               ),

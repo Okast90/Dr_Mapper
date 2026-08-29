@@ -14,7 +14,6 @@ import 'package:dji_mapper/shared/map_provider.dart';
 import 'package:dji_mapper/shared/value_listeneables.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
 import 'package:flutter_map_dragmarker/flutter_map_dragmarker.dart';
@@ -25,7 +24,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../shared/aircraft_settings.dart';
 
-enum MapLayer { streets, satellite }
+enum MapLayer { streets, satellite, openStreetMap }
 
 class HomeLayout extends StatefulWidget {
   const HomeLayout({super.key});
@@ -51,6 +50,20 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
   bool _isDrawingPolygon = false;
   bool _isEditingPolygon = false;
   int? _selectedPolygonPointIndex;
+  final List<List<LatLng>> _photoFootprints = [];
+  bool _showCoverageQC = false;
+  double _coveragePercentage = 0.0;
+
+  String _getMapLayerName(MapLayer layer) {
+    switch (layer) {
+      case MapLayer.streets:
+        return 'Google Plans';
+      case MapLayer.satellite:
+        return 'Google Satellite';
+      case MapLayer.openStreetMap:
+        return 'OpenStreetMap';
+    }
+  }
 
   Widget _mapActionButton({
     required IconData icon,
@@ -58,24 +71,90 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
     required VoidCallback onPressed,
     bool selected = false,
   }) {
-    final activeColor = Theme.of(context).colorScheme.primary;
-    final inactiveColor = Theme.of(context).colorScheme.surfaceContainerHighest;
-    final iconColor = selected
-        ? Colors.white
-        : Theme.of(context).colorScheme.onSurfaceVariant;
-
+    final colorScheme = Theme.of(context).colorScheme;
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: selected ? activeColor : inactiveColor,
+        color: selected
+            ? colorScheme.primaryContainer
+            : colorScheme.surface.withAlpha(235),
         borderRadius: BorderRadius.circular(10),
-        elevation: 1,
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: onPressed,
           child: Padding(
-            padding: const EdgeInsets.all(10),
-            child: Icon(icon, size: 18, color: iconColor),
+            padding: const EdgeInsets.all(8.0),
+            child: Icon(
+              icon,
+              size: 20,
+              color: selected
+                  ? colorScheme.onPrimaryContainer
+                  : colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCoverageBadge(BuildContext context) {
+    final pct = _coveragePercentage;
+    final colorScheme = Theme.of(context).colorScheme;
+    final isGood = pct >= 95.0;
+    final isFair = pct >= 80.0;
+
+    final Color badgeColor = isGood
+        ? Colors.green
+        : isFair
+            ? Colors.amber.shade700
+            : Colors.deepOrange;
+
+    final String qualityLabel = isGood
+        ? 'Excellente'
+        : isFair
+            ? 'Bonne'
+            : 'Incomplète';
+
+    return Material(
+      color: Theme.of(context).colorScheme.surface.withAlpha(235),
+      borderRadius: BorderRadius.circular(14),
+      elevation: 3,
+      child: Tooltip(
+        message:
+            'Couverture photo : ${pct.toStringAsFixed(1)}% de la zone\nQualité : $qualityLabel',
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: badgeColor.withAlpha(120),
+              width: 1.2,
+            ),
+            color: badgeColor.withAlpha(22),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                isGood
+                    ? Icons.verified_rounded
+                    : isFair
+                        ? Icons.pie_chart_rounded
+                        : Icons.warning_amber_rounded,
+                size: 16,
+                color: badgeColor,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'Couverture : ${pct.toStringAsFixed(1)}%',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: colorScheme.onSurface,
+                  letterSpacing: 0.1,
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -86,10 +165,19 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
+    _tabController.addListener(() {
+      if (mounted) setState(() {});
+    });
     _getLocationAndMoveMap();
 
-    _selectedMapLayer =
-        prefs.getInt("mapLayer") == 1 ? MapLayer.satellite : MapLayer.streets;
+    final savedLayer = prefs.getInt("mapLayer") ?? 0;
+    if (savedLayer == 1) {
+      _selectedMapLayer = MapLayer.satellite;
+    } else if (savedLayer == 2) {
+      _selectedMapLayer = MapLayer.openStreetMap;
+    } else {
+      _selectedMapLayer = MapLayer.streets;
+    }
 
     final listenables = Provider.of<ValueListenables>(context, listen: false);
 
@@ -239,7 +327,10 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
   }
 
   void _selectPolygonPoint(ValueListenables listenables, LatLng point) {
-    final index = listenables.polygon.indexOf(point);
+    final targetList = listenables.mappingMode == MappingMode.corridor
+        ? listenables.centerline
+        : listenables.polygon;
+    final index = targetList.indexOf(point);
     if (index < 0) return;
 
     setState(() {
@@ -260,8 +351,33 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
   void _deleteSelectedPolygonPoint(ValueListenables listenables) {
     if (_selectedPolygonPointIndex == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sélectionnez un point du polygone à supprimer.')),
+        const SnackBar(content: Text('Sélectionnez un point à supprimer.')),
       );
+      return;
+    }
+
+    if (listenables.mappingMode == MappingMode.corridor) {
+      if (_selectedPolygonPointIndex! < 0 ||
+          _selectedPolygonPointIndex! >= listenables.centerline.length) {
+        _selectedPolygonPointIndex = null;
+        return;
+      }
+
+      setState(() {
+        listenables.centerline.removeAt(_selectedPolygonPointIndex!);
+        _selectedPolygonPointIndex = null;
+        if (listenables.centerline.length < 2) {
+          listenables.polygon.clear();
+          listenables.homePoint = null;
+          listenables.photoLocations.clear();
+          _photoMarkers.clear();
+          listenables.flightLine = null;
+          listenables.takeoffLine = null;
+          listenables.returnLine = null;
+        } else {
+          _applyDrawnPolygon(listenables, fitToMap: false);
+        }
+      });
       return;
     }
 
@@ -276,11 +392,56 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
       _selectedPolygonPointIndex = null;
       if (listenables.polygon.length < 3) {
         listenables.homePoint = null;
+        listenables.photoLocations.clear();
+        _photoMarkers.clear();
+        listenables.flightLine = null;
+        listenables.takeoffLine = null;
+        listenables.returnLine = null;
       }
     });
   }
 
   void _applyDrawnPolygon(ValueListenables listenables, {bool fitToMap = true}) {
+    if (listenables.mappingMode == MappingMode.corridor) {
+      if (listenables.centerline.isEmpty && listenables.polygon.isNotEmpty) {
+        listenables.centerline = List.from(listenables.polygon);
+      }
+      final centerline = _normalizePolygon(listenables.centerline);
+      if (centerline.length < 2) {
+        return;
+      }
+
+      listenables.centerline = centerline;
+      listenables.polygon = DroneMappingEngine.generateCorridorBufferPolygon(
+        centerline,
+        listenables.corridorWidth.toDouble(),
+      );
+
+      if (listenables.homePoint == null && centerline.isNotEmpty) {
+        listenables.homePoint = centerline.first;
+      }
+
+      if (fitToMap) {
+        final mapProvider = Provider.of<MapProvider>(context, listen: false);
+        final bounds = LatLngBounds.fromPoints(listenables.polygon.isNotEmpty
+            ? listenables.polygon
+            : centerline);
+        mapProvider.mapController.fitCamera(
+          CameraFit.bounds(
+            bounds: bounds,
+            padding: const EdgeInsets.all(80),
+            maxZoom: 18,
+          ),
+        );
+      }
+
+      listenables.notify();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _buildMarkers(listenables);
+      });
+      return;
+    }
+
     final polygon = _normalizePolygon(listenables.polygon);
     if (polygon.length < 3) {
       return;
@@ -310,11 +471,22 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
   }
 
   void _validateContour(ValueListenables listenables) {
-    if (listenables.polygon.length < 3) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Le contour doit contenir au moins 3 points.')),
-      );
-      return;
+    if (listenables.mappingMode == MappingMode.corridor) {
+      if (listenables.centerline.length < 2 && listenables.polygon.length < 2) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Le corridor doit contenir au moins 2 points de tracé.')),
+        );
+        return;
+      }
+    } else {
+      if (listenables.polygon.length < 3) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Le contour doit contenir au moins 3 points.')),
+        );
+        return;
+      }
     }
 
     setState(() {
@@ -332,7 +504,11 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Contour validé et activé pour la mission.')),
+      SnackBar(
+        content: Text(listenables.mappingMode == MappingMode.corridor
+            ? 'Tracé corridor validé et activé.'
+            : 'Contour validé et activé pour la mission.'),
+      ),
     );
   }
 
@@ -395,10 +571,44 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
       groundOffset: listenables.groundOffset.toDouble(),
     );
 
-    var waypoints = droneMapping.generateWaypoints(listenables.polygon, listenables.createCameraPoints, listenables.fillGrid, listenables.homePoint);
+    List<LatLng> waypoints;
+    if (listenables.mappingMode == MappingMode.corridor) {
+      final activeCenterline = listenables.centerline.isNotEmpty
+          ? listenables.centerline
+          : listenables.polygon;
+
+      if (activeCenterline.length >= 2) {
+        listenables.centerline = activeCenterline;
+        listenables.polygon = DroneMappingEngine.generateCorridorBufferPolygon(
+          activeCenterline,
+          listenables.corridorWidth.toDouble(),
+        );
+        waypoints = droneMapping.generateCorridorWaypoints(
+          centerline: activeCenterline,
+          corridorWidth: listenables.corridorWidth.toDouble(),
+          flightLines: listenables.corridorFlightLines,
+          createCameraPoints: listenables.createCameraPoints,
+          homePoint: listenables.homePoint,
+        );
+      } else {
+        waypoints = [];
+      }
+    } else {
+      waypoints = droneMapping.generateWaypoints(
+        listenables.polygon,
+        listenables.createCameraPoints,
+        listenables.fillGrid,
+        listenables.homePoint,
+        listenables.useInsetBuffer,
+        listenables.useConvexDecomposition,
+      );
+    }
+    
     listenables.photoLocations = waypoints;
     if (waypoints.isEmpty) {
       _photoMarkers.clear();
+      _photoFootprints.clear();
+      _coveragePercentage = 0.0;
       listenables.flightLine = null;
       listenables.takeoffLine = null;
       listenables.returnLine = null;
@@ -409,41 +619,56 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
     }
 
     _photoMarkers.clear();
+    _photoFootprints.clear();
+    _photoFootprints.addAll(droneMapping.generatePhotoFootprints(waypoints));
+
+    final targetPolygon = listenables.mappingMode == MappingMode.corridor
+        ? (listenables.polygon.isNotEmpty
+            ? listenables.polygon
+            : listenables.centerline)
+        : listenables.polygon;
+    if (targetPolygon.length >= 3) {
+      _coveragePercentage = droneMapping.calculateCoveragePercentage(
+        polygon: targetPolygon,
+        photoLocations: waypoints,
+      );
+    } else {
+      _coveragePercentage = waypoints.isNotEmpty ? 100.0 : 0.0;
+    }
 
     for (int i = 0; i < waypoints.length; i++) {
       var photoLocation = waypoints[i];
       _photoMarkers.add(Marker(
         point: photoLocation,
-        height: 40,  // Increased height to fit number
+        height: 40,
         alignment: Alignment.center,
         rotate: false,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (listenables.createCameraPoints)
-                Icon(Icons.photo_camera,
-                    size: 20,  // Reduced size for better fit
-                    color: Theme.of(context).colorScheme.onPrimaryContainer)
-              else
-                Icon(Icons.place_sharp,
-                    size: 20,  // Reduced size for better fit
-                    color: Theme.of(context).colorScheme.onPrimaryContainer),
-
-              Text(  // Waypoint number text
-                "${i + 1}",
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onPrimaryContainer,
-                  fontSize: 10,
-                ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (listenables.createCameraPoints)
+              Icon(Icons.photo_camera,
+                  size: 20,
+                  color: Theme.of(context).colorScheme.onPrimaryContainer)
+            else
+              Icon(Icons.place_sharp,
+                  size: 20,
+                  color: Theme.of(context).colorScheme.onPrimaryContainer),
+            Text(
+              "${i + 1}",
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onPrimaryContainer,
+                fontSize: 10,
               ),
-            ],
-          ),
-        ));
+            ),
+          ],
+        ),
+      ));
     }
     listenables.flightLine = Polyline(
       points: waypoints,
       strokeWidth: 3,
-      color: Theme.of(context).colorScheme.tertiary
+      color: Theme.of(context).colorScheme.tertiary,
     );
 
     // Draw directional arrow markers
@@ -462,30 +687,24 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
         lastPoint = waypoints[i];
       }
 
-      // Add dashed takeoff line from home to first waypoint to designate 'Start'
-      final home = listenables.homePoint!;
-      final first = waypoints.first;
-      final last = waypoints.last;
-      //final bearing = distance.bearing(home, first);
-      //final offsetDistance = 2.0; // metres offset from home
-      //final offsetPoint = distance.offset(home, offsetDistance, bearing);
-
+      // Draw takeoffLine & returnLine
       listenables.takeoffLine = Polyline(
-        points: [home, first],
-        strokeWidth: 1,
+        points: [listenables.homePoint!, waypoints.first],
+        strokeWidth: 3,
         color: Theme.of(context).colorScheme.primary,
-        pattern: StrokePattern.dotted(), 
+        pattern: const StrokePattern.dotted(),
       );
 
       listenables.returnLine = Polyline(
-        points: [home, last],
-        strokeWidth: 1,
-        color: Theme.of(context).colorScheme.primary,
-        pattern: StrokePattern.dotted(), 
+        points: [waypoints.last, listenables.homePoint!],
+        strokeWidth: 3,
+        color: Theme.of(context).colorScheme.error,
+        pattern: const StrokePattern.dotted(),
       );
 
-      _placeArrowMarkers(home, first, arrowSpacing, distance, 0.0, _takeoffLineArrowMarkers, Theme.of(context).colorScheme.primary, 10);
-      _placeArrowMarkers(last, home, arrowSpacing, distance, 0.0, _returnLineArrowMarkers, Theme.of(context).colorScheme.primary, 10);
+      _placeArrowMarkers(listenables.homePoint!, waypoints.first, arrowSpacing, distance, 0, _takeoffLineArrowMarkers, Theme.of(context).colorScheme.primary, 15);
+      _placeArrowMarkers(waypoints.last, listenables.homePoint!, arrowSpacing, distance, 0, _returnLineArrowMarkers, Theme.of(context).colorScheme.error, 15);
+
     } else {
       listenables.takeoffLine = null;
       listenables.returnLine = null;
@@ -533,24 +752,46 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
     return cumulativeDistance;
   }
 
-  String? _lastMissionVisualSignature;
+  String _lastMissionVisualSignature = "";
 
   void _refreshMissionVisuals(ValueListenables listenables) {
     final signature = [
+      listenables.mappingMode.name,
       listenables.polygon.length,
-      ...listenables.polygon.map((point) => '${point.latitude.toStringAsFixed(7)}:${point.longitude.toStringAsFixed(7)}'),
-      listenables.homePoint?.latitude.toStringAsFixed(7),
-      listenables.homePoint?.longitude.toStringAsFixed(7),
+      listenables.centerline.length,
+      listenables.corridorWidth,
+      listenables.corridorFlightLines,
       listenables.altitude,
-      listenables.createCameraPoints,
-      listenables.fillGrid,
-      listenables.showPoints,
       listenables.forwardOverlap,
       listenables.sideOverlap,
+      listenables.sensorWidth,
+      listenables.sensorHeight,
+      listenables.focalLength,
+      listenables.imageWidth,
+      listenables.imageHeight,
       listenables.rotation,
-      listenables.speed,
       listenables.groundOffset,
-    ].join('|');
+      listenables.createCameraPoints,
+      listenables.fillGrid,
+      listenables.useInsetBuffer,
+      listenables.useConvexDecomposition,
+      listenables.homePoint?.latitude,
+      listenables.homePoint?.longitude,
+      listenables.speed,
+      listenables.delayAtWaypoint,
+      if (listenables.polygon.isNotEmpty) ...[
+        listenables.polygon.first.latitude,
+        listenables.polygon.first.longitude,
+        listenables.polygon.last.latitude,
+        listenables.polygon.last.longitude,
+      ],
+      if (listenables.centerline.isNotEmpty) ...[
+        listenables.centerline.first.latitude,
+        listenables.centerline.first.longitude,
+        listenables.centerline.last.latitude,
+        listenables.centerline.last.longitude,
+      ],
+    ].join("|");
 
     if (signature == _lastMissionVisualSignature) {
       return;
@@ -558,11 +799,17 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
 
     _lastMissionVisualSignature = signature;
 
-    if (listenables.polygon.length > 2 && listenables.altitude >= 5) {
+    final isCorridorValid = listenables.mappingMode == MappingMode.corridor &&
+        (listenables.centerline.length >= 2 || listenables.polygon.length >= 2);
+    final isGridValid = listenables.mappingMode == MappingMode.grid &&
+        listenables.polygon.length > 2;
+
+    if ((isCorridorValid || isGridValid) && listenables.altitude >= 5) {
       _buildMarkers(listenables);
     } else {
       listenables.photoLocations.clear();
       _photoMarkers.clear();
+      _photoFootprints.clear();
       listenables.flightLine = null;
       listenables.takeoffLine = null;
       listenables.returnLine = null;
@@ -581,14 +828,27 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
           _refreshMissionVisuals(listenables);
         });
 
-        var children = [
-          Flexible(
-            flex: 2,
-            child: FlutterMap(
+        final mapWidget = FlutterMap(
               mapController: mapProvider.mapController,
               options: MapOptions(
                 onTap: (tapPosition, point) => setState(() {
                   if (!_isDrawingPolygon) {
+                    return;
+                  }
+
+                  if (listenables.mappingMode == MappingMode.corridor) {
+                    if (listenables.homePoint == null) {
+                      listenables.homePoint = point;
+                    }
+                    final alreadyExists = listenables.centerline.any(
+                      (existing) =>
+                          existing.latitude == point.latitude &&
+                          existing.longitude == point.longitude,
+                    );
+                    if (!alreadyExists) {
+                      listenables.centerline.add(point);
+                      _applyDrawnPolygon(listenables, fitToMap: false);
+                    }
                     return;
                   }
 
@@ -600,7 +860,8 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
                   }
 
                   final alreadyExists = listenables.polygon.any(
-                    (existing) => existing.latitude == point.latitude &&
+                    (existing) =>
+                        existing.latitude == point.latitude &&
                         existing.longitude == point.longitude,
                   );
 
@@ -614,6 +875,22 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
                     return;
                   }
 
+                  if (listenables.mappingMode == MappingMode.corridor) {
+                    if (listenables.homePoint == null) {
+                      listenables.homePoint = point;
+                    }
+                    final alreadyExists = listenables.centerline.any(
+                      (existing) =>
+                          existing.latitude == point.latitude &&
+                          existing.longitude == point.longitude,
+                    );
+                    if (!alreadyExists) {
+                      listenables.centerline.add(point);
+                      _applyDrawnPolygon(listenables, fitToMap: false);
+                    }
+                    return;
+                  }
+
                   if (listenables.homePoint == null) {
                     listenables.homePoint = point;
                     listenables.polygon.add(point);
@@ -622,7 +899,8 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
                   }
 
                   final alreadyExists = listenables.polygon.any(
-                    (existing) => existing.latitude == point.latitude &&
+                    (existing) =>
+                        existing.latitude == point.latitude &&
                         existing.longitude == point.longitude,
                   );
 
@@ -635,40 +913,77 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
                   setState(() {
                     listenables.homePoint = point;
                   });
-                }
+                },
               ),
               children: [
                 TileLayer(
-                    tileProvider: CancellableNetworkTileProvider(),
-                    tileBuilder:
-                        Theme.of(context).brightness == Brightness.dark &&
-                                _selectedMapLayer == MapLayer.streets
-                            ? (context, tileWidget, tile) =>
-                                darkModeTileBuilder(context, tileWidget, tile)
-                            : null,
-                    urlTemplate: _selectedMapLayer == MapLayer.streets
-                        ? 'https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}'
-                        : 'https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-                    userAgentPackageName: 'com.yarosfpv.dji_mapper',
-                    subdomains: const ['mt0', 'mt1', 'mt2', 'mt3']
-                  ),
-                // flight path boundary
+                  key: ValueKey(_selectedMapLayer),
+                  tileProvider: CancellableNetworkTileProvider(),
+                  tileBuilder: Theme.of(context).brightness == Brightness.dark &&
+                          (_selectedMapLayer == MapLayer.streets ||
+                              _selectedMapLayer == MapLayer.openStreetMap)
+                      ? (context, tileWidget, tile) =>
+                          darkModeTileBuilder(context, tileWidget, tile)
+                      : null,
+                  urlTemplate: _selectedMapLayer == MapLayer.streets
+                      ? 'https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}'
+                      : _selectedMapLayer == MapLayer.satellite
+                          ? 'https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'
+                          : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.yarosfpv.dji_mapper',
+                  subdomains: _selectedMapLayer == MapLayer.openStreetMap
+                      ? const ['a', 'b', 'c']
+                      : const ['mt0', 'mt1', 'mt2', 'mt3'],
+                ),
+                // flight path boundary (or corridor buffer polygon)
                 PolygonLayer(polygons: [
                   if (listenables.polygon.length > 1)
                     Polygon(
-                        points: listenables.polygon,
-                        color:
-                            Theme.of(context).colorScheme.primary.withAlpha(77),
-                        borderColor: Theme.of(context).colorScheme.primary,
-                        borderStrokeWidth: 3),
+                      points: listenables.polygon,
+                      color: Theme.of(context)
+                          .colorScheme
+                          .primary
+                          .withAlpha(77),
+                      borderColor: Theme.of(context).colorScheme.primary,
+                      borderStrokeWidth: 3,
+                    ),
                 ]),
-                // flightLine, takeoffLine & returnLine
-                if (listenables.homePoint != null) 
+                // Photo coverage footprints / shadows (Quality Control)
+                if (_showCoverageQC && _photoFootprints.isNotEmpty)
+                  PolygonLayer(
+                    polygons: [
+                      for (final footprint in _photoFootprints)
+                        Polygon(
+                          points: footprint,
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? Colors.cyanAccent.withAlpha(35)
+                              : Colors.indigo.withAlpha(38),
+                          borderColor:
+                              Theme.of(context).brightness == Brightness.dark
+                                  ? Colors.cyanAccent.withAlpha(100)
+                                  : Colors.indigo.withAlpha(90),
+                          borderStrokeWidth: 1.0,
+                        ),
+                    ],
+                  ),
+                // flightLine, takeoffLine, returnLine & centerline
+                if (listenables.homePoint != null ||
+                    listenables.centerline.isNotEmpty)
                   PolylineLayer(
                     polylines: [
-                      if (listenables.flightLine != null) listenables.flightLine!,
-                      if (listenables.takeoffLine != null) listenables.takeoffLine!,  // dotted start line from home
-                      if (listenables.returnLine != null) listenables.returnLine!,  // dotted return line to home
+                      if (listenables.mappingMode == MappingMode.corridor &&
+                          listenables.centerline.length >= 2)
+                        Polyline(
+                          points: listenables.centerline,
+                          strokeWidth: 2.5,
+                          color: Theme.of(context).colorScheme.secondary,
+                        ),
+                      if (listenables.flightLine != null)
+                        listenables.flightLine!,
+                      if (listenables.takeoffLine != null)
+                        listenables.takeoffLine!,
+                      if (listenables.returnLine != null)
+                        listenables.returnLine!,
                     ],
                   ),
                 // directional flight path arrows
@@ -678,59 +993,89 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
                 // photo markers
                 if (listenables.showPoints)
                   MarkerLayer(markers: _photoMarkers),
-                if (_isEditingPolygon && listenables.polygon.length >= 2)
-                  DragMarkers(
-                    markers: [
-                      for (int index = 0; index < listenables.polygon.length; index++)
-                        DragMarker(
-                          size: const Size(36, 36),
-                          point: listenables.polygon[index],
-                          alignment: Alignment.topCenter,
-                          builder: (_, coords, b) {
-                            final isSelected = _selectedPolygonPointIndex == index;
-                            return Container(
-                              width: 36,
-                              height: 36,
-                              decoration: BoxDecoration(
-                                color: isSelected
-                                    ? Theme.of(context)
-                                        .colorScheme
-                                        .primary
-                                        .withOpacity(0.22)
-                                    : Theme.of(context)
-                                        .colorScheme
-                                        .secondary
-                                        .withOpacity(0.18),
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: isSelected
-                                      ? Theme.of(context).colorScheme.primary
-                                      : Theme.of(context).colorScheme.secondary,
-                                  width: 2,
-                                ),
-                              ),
-                              child: Center(
-                                child: Icon(
-                                  Icons.adjust,
-                                  size: 18,
-                                  color: isSelected
-                                      ? Theme.of(context).colorScheme.primary
-                                      : Theme.of(context).colorScheme.secondary,
-                                ),
-                              ),
-                            );
-                          },
-                          onDragUpdate: (details, latLng) {
-                            if (index >= 0 && index < listenables.polygon.length) {
-                              listenables.polygon[index] = latLng;
-                              _selectedPolygonPointIndex = index;
-                            }
-                          },
-                          onTap: (latLng) {
-                            _selectPolygonPoint(listenables, latLng);
-                          },
-                        ),
-                    ],
+                if (_isEditingPolygon)
+                  Builder(
+                    builder: (context) {
+                      final activePoints =
+                          listenables.mappingMode == MappingMode.corridor
+                              ? listenables.centerline
+                              : listenables.polygon;
+
+                      if (activePoints.length < 2) {
+                        return const SizedBox.shrink();
+                      }
+
+                      return DragMarkers(
+                        markers: [
+                          for (int index = 0; index < activePoints.length; index++)
+                            DragMarker(
+                              size: const Size(36, 36),
+                              point: activePoints[index],
+                              alignment: Alignment.topCenter,
+                              builder: (_, coords, b) {
+                                final isSelected =
+                                    _selectedPolygonPointIndex == index;
+                                return Container(
+                                  width: 36,
+                                  height: 36,
+                                  decoration: BoxDecoration(
+                                    color: isSelected
+                                        ? Theme.of(context)
+                                            .colorScheme
+                                            .primary
+                                            .withAlpha(56)
+                                        : Theme.of(context)
+                                            .colorScheme
+                                            .secondary
+                                            .withAlpha(46),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: isSelected
+                                          ? Theme.of(context)
+                                              .colorScheme
+                                              .primary
+                                          : Theme.of(context)
+                                              .colorScheme
+                                              .secondary,
+                                      width: 2,
+                                    ),
+                                  ),
+                                  child: Center(
+                                    child: Icon(
+                                      Icons.adjust,
+                                      size: 18,
+                                      color: isSelected
+                                          ? Theme.of(context)
+                                              .colorScheme
+                                              .primary
+                                          : Theme.of(context)
+                                              .colorScheme
+                                              .secondary,
+                                    ),
+                                  ),
+                                );
+                              },
+                              onDragUpdate: (details, latLng) {
+                                if (index >= 0 && index < activePoints.length) {
+                                  if (listenables.mappingMode ==
+                                      MappingMode.corridor) {
+                                    listenables.centerline[index] = latLng;
+                                    _selectedPolygonPointIndex = index;
+                                    _applyDrawnPolygon(listenables,
+                                        fitToMap: false);
+                                  } else {
+                                    listenables.polygon[index] = latLng;
+                                    _selectedPolygonPointIndex = index;
+                                  }
+                                }
+                              },
+                              onTap: (latLng) {
+                                _selectPolygonPoint(listenables, latLng);
+                              },
+                            ),
+                        ],
+                      );
+                    },
                   ),
                 // home point icon
                 if (listenables.homePoint != null) 
@@ -773,14 +1118,16 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
                   alignment: Alignment.topLeft,
                   child: Padding(
                     padding: const EdgeInsets.all(8.0),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         Material(
                           color: Theme.of(context)
                               .colorScheme
                               .surface
-                              .withOpacity(0.92),
+                              .withAlpha(235),
                           borderRadius: BorderRadius.circular(14),
                           elevation: 3,
                           child: Padding(
@@ -820,18 +1167,36 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
                                 const SizedBox(width: 4),
                                 _mapActionButton(
                                   icon: Icons.layers_rounded,
-                                  tooltip: 'Changer de couche de carte',
-                                  onPressed: () => setState(() {
-                                    _selectedMapLayer =
-                                        _selectedMapLayer == MapLayer.streets
-                                            ? MapLayer.satellite
-                                            : MapLayer.streets;
-                                    prefs.setInt(
-                                        "mapLayer",
-                                        _selectedMapLayer == MapLayer.streets
-                                            ? 0
-                                            : 1);
-                                  }),
+                                  tooltip:
+                                      'Couche : ${_getMapLayerName(_selectedMapLayer)}',
+                                  onPressed: () {
+                                    setState(() {
+                                      switch (_selectedMapLayer) {
+                                        case MapLayer.streets:
+                                          _selectedMapLayer = MapLayer.satellite;
+                                          prefs.setInt("mapLayer", 1);
+                                          break;
+                                        case MapLayer.satellite:
+                                          _selectedMapLayer =
+                                              MapLayer.openStreetMap;
+                                          prefs.setInt("mapLayer", 2);
+                                          break;
+                                        case MapLayer.openStreetMap:
+                                          _selectedMapLayer = MapLayer.streets;
+                                          prefs.setInt("mapLayer", 0);
+                                          break;
+                                      }
+                                    });
+                                    ScaffoldMessenger.of(context)
+                                        .hideCurrentSnackBar();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                            'Couche active : ${_getMapLayerName(_selectedMapLayer)}'),
+                                        duration: const Duration(seconds: 1),
+                                      ),
+                                    );
+                                  },
                                 ),
                                 const SizedBox(width: 4),
                                 _mapActionButton(
@@ -882,6 +1247,29 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
                                 ),
                                 const SizedBox(width: 4),
                                 _mapActionButton(
+                                  icon: Icons.radar_rounded,
+                                  tooltip: _showCoverageQC
+                                      ? 'Masquer le contrôle qualité (Ombre de couverture)'
+                                      : 'Contrôle qualité (Ombre de couverture)',
+                                  selected: _showCoverageQC,
+                                  onPressed: () {
+                                    setState(() {
+                                      _showCoverageQC = !_showCoverageQC;
+                                    });
+                                    ScaffoldMessenger.of(context)
+                                        .hideCurrentSnackBar();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(_showCoverageQC
+                                            ? 'Contrôle qualité activé : affichage de l\'ombre de couverture'
+                                            : 'Contrôle qualité désactivé'),
+                                        duration: const Duration(seconds: 1),
+                                      ),
+                                    );
+                                  },
+                                ),
+                                const SizedBox(width: 4),
+                                _mapActionButton(
                                   icon: Icons.delete_outline_rounded,
                                   tooltip: 'Effacer le polygone',
                                   onPressed: () => setState(() {
@@ -897,155 +1285,397 @@ class _HomeLayoutState extends State<HomeLayout> with TickerProviderStateMixin {
                             ),
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 300),
-                          child: Autocomplete<MapSearchLocation>(
-                            optionsBuilder: (textEditingValue) {
-                              return Future.delayed(_debounce, () async {
-                                _onSearchChanged(textEditingValue.text,
-                                    (locations) => locations);
-                                return _searchLocations;
-                              });
-                            },
-                            onSelected: (option) =>
-                                mapProvider.mapController.move(option.location, 17),
-                            optionsViewBuilder: (context, onSelected, options) {
-                              return Align(
-                                alignment: Alignment.topLeft,
-                                child: Material(
-                                  elevation: 4.0,
-                                  child: ConstrainedBox(
-                                    constraints: const BoxConstraints(
-                                      maxHeight: 200,
-                                      maxWidth: 600,
-                                    ),
-                                    child: ListView.builder(
-                                      padding: EdgeInsets.zero,
-                                      shrinkWrap: true,
-                                      itemCount: options.length,
-                                      itemBuilder: (context, index) {
-                                        final option = options.elementAt(index);
-                                        return InkWell(
-                                          onTap: () {
-                                            onSelected(option);
-                                          },
-                                          child: Builder(
-                                            builder: (context) {
-                                              final highlight =
-                                                  AutocompleteHighlightedOption
-                                                          .of(context) ==
-                                                      index;
-                                              if (highlight) {
-                                                SchedulerBinding.instance
-                                                    .addPostFrameCallback(
-                                                        (Duration timeStamp) {
-                                                  Scrollable.ensureVisible(
-                                                      context,
-                                                      alignment: 0.5,
+                        Material(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .surface
+                              .withAlpha(235),
+                          borderRadius: BorderRadius.circular(14),
+                          elevation: 3,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6.0,
+                              vertical: 6.0,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .surfaceContainerHighest,
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  padding: const EdgeInsets.all(10),
+                                  child: Icon(
+                                    Icons.search_rounded,
+                                    size: 18,
+                                    color: Theme.of(context).colorScheme.primary,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                SizedBox(
+                                  width: 220,
+                                  child: Autocomplete<MapSearchLocation>(
+                                    optionsBuilder: (textEditingValue) {
+                                      return Future.delayed(_debounce, () async {
+                                        _onSearchChanged(textEditingValue.text,
+                                            (locations) => locations);
+                                        return _searchLocations;
+                                      });
+                                    },
+                                    onSelected: (option) =>
+                                        mapProvider.mapController.move(option.location, 17),
+                                    optionsViewBuilder: (context, onSelected, options) {
+                                      return Align(
+                                        alignment: Alignment.topLeft,
+                                        child: Material(
+                                          color: Theme.of(context).colorScheme.surface,
+                                          borderRadius: BorderRadius.circular(14),
+                                          elevation: 6.0,
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              borderRadius: BorderRadius.circular(14),
+                                              border: Border.all(
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .outlineVariant
+                                                    .withAlpha(120),
+                                              ),
+                                            ),
+                                            constraints: const BoxConstraints(
+                                              maxHeight: 220,
+                                              maxWidth: 320,
+                                            ),
+                                            child: ClipRRect(
+                                              borderRadius: BorderRadius.circular(14),
+                                              child: ListView.separated(
+                                                padding: const EdgeInsets.symmetric(vertical: 4),
+                                                shrinkWrap: true,
+                                                itemCount: options.length,
+                                                separatorBuilder: (context, index) =>
+                                                    Divider(height: 1, color: Theme.of(context).colorScheme.outlineVariant.withAlpha(60)),
+                                                itemBuilder: (context, index) {
+                                                  final option = options.elementAt(index);
+                                                  return InkWell(
+                                                    onTap: () {
+                                                      onSelected(option);
+                                                    },
+                                                    child: Padding(
+                                                      padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 10.0),
+                                                      child: Row(
+                                                        children: [
+                                                          Icon(
+                                                            Icons.location_on_outlined,
+                                                            size: 16,
+                                                            color: Theme.of(context).colorScheme.primary,
+                                                          ),
+                                                          const SizedBox(width: 8),
+                                                          Expanded(
+                                                            child: Text(
+                                                              option.name,
+                                                              style: TextStyle(
+                                                                fontSize: 12.5,
+                                                                color: Theme.of(context).colorScheme.onSurface,
+                                                              ),
+                                                              maxLines: 2,
+                                                              overflow: TextOverflow.ellipsis,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
                                                   );
-                                                });
-                                              }
-                                              return Container(
-                                                color: highlight
-                                                    ? Theme.of(context)
-                                                        .focusColor
-                                                    : null,
-                                                padding: const EdgeInsets.all(16.0),
-                                                child: Column(
-                                                  mainAxisSize: MainAxisSize.min,
-                                                  crossAxisAlignment:
-                                                      CrossAxisAlignment.start,
-                                                  children: [
-                                                    Text(option.name),
-                                                  ],
-                                                ),
-                                              );
-                                            },
+                                                },
+                                              ),
+                                            ),
                                           ),
-                                        );
-                                      },
-                                    ),
+                                        ),
+                                      );
+                                    },
+                                    displayStringForOption: (option) => option.name,
+                                    fieldViewBuilder: (
+                                      context,
+                                      textEditingController,
+                                      focusNode,
+                                      onFieldSubmitted,
+                                    ) =>
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: TextField(
+                                                controller: textEditingController,
+                                                focusNode: focusNode,
+                                                style: const TextStyle(fontSize: 13),
+                                                onSubmitted: (value) async {
+                                                  await _search(textEditingController.text);
+                                                  if (_searchLocations.isNotEmpty) {
+                                                    mapProvider.mapController.move(
+                                                        _searchLocations.first.location, 17);
+                                                  }
+                                                },
+                                                decoration: const InputDecoration(
+                                                  hintText: 'Rechercher un lieu...',
+                                                  hintStyle: TextStyle(fontSize: 13),
+                                                  isDense: true,
+                                                  contentPadding: EdgeInsets.symmetric(
+                                                      horizontal: 4, vertical: 8),
+                                                  border: InputBorder.none,
+                                                  focusedBorder: InputBorder.none,
+                                                  enabledBorder: InputBorder.none,
+                                                ),
+                                              ),
+                                            ),
+                                            if (textEditingController.text.isNotEmpty)
+                                              InkWell(
+                                                borderRadius: BorderRadius.circular(8),
+                                                onTap: () {
+                                                  textEditingController.clear();
+                                                  setState(() {});
+                                                },
+                                                child: Padding(
+                                                  padding: const EdgeInsets.all(4.0),
+                                                  child: Icon(
+                                                    Icons.close_rounded,
+                                                    size: 16,
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .onSurfaceVariant,
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                        ),
                                   ),
                                 ),
-                              );
-                            },
-                            displayStringForOption: (option) => option.name,
-                            fieldViewBuilder: (
-                              context,
-                              textEditingController,
-                              focusNode,
-                              onFieldSubmitted,
-                            ) =>
-                                TextFormField(
-                                  controller: textEditingController,
-                                  focusNode: focusNode,
-                                  onFieldSubmitted: (value) async {
-                                    await _search(textEditingController.text);
-                                    if (_searchLocations.isNotEmpty) {
-                                      mapProvider.mapController.move(
-                                          _searchLocations.first.location, 17);
-                                    }
-                                  },
-                                  decoration: InputDecoration(
-                                    hintText: 'Search location',
-                                    border: const OutlineInputBorder(),
-                                    filled: true,
-                                    suffixIcon: IconButton(
-                                      icon: const Icon(Icons.clear),
-                                      onPressed: () =>
-                                          textEditingController.clear(),
-                                    ),
-                                    fillColor:
-                                        Theme.of(context).colorScheme.surface,
-                                  ),
-                                ),
+                              ],
+                            ),
                           ),
                         ),
+                        if (listenables.photoLocations.isNotEmpty &&
+                            (listenables.polygon.length >= 3 ||
+                                listenables.centerline.length >= 2)) ...[
+                          const SizedBox(width: 8),
+                          _buildCoverageBadge(context),
+                        ],
                       ],
                     ),
                   ),
                 ),
               ],
-            ),
-          ),
-          Flexible(
-              flex: 1,
-              child: Column(
-                children: [
-                  TabBar(
-                    controller: _tabController,
-                    indicatorSize: TabBarIndicatorSize.tab,
-                    indicator: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      color: Theme.of(context).colorScheme.primary.withAlpha(125),
-                    ),
-                    tabs: const [
-                      Tab(icon: Icon(Icons.info_outline), text: 'Info'),
-                      Tab(icon: Icon(Icons.airplanemode_on), text: 'Aircraft'),
-                      Tab(icon: Icon(Icons.photo_camera), text: 'Camera'),
-                      Tab(icon: Icon(Icons.file_copy), text: 'File'),
-                    ],
+            );
+
+        final sideMenuWidget = SizedBox(
+          width: 350,
+          child: Column(
+            children: [
+              Container(
+                margin: const EdgeInsets.fromLTRB(10, 8, 10, 4),
+                decoration: BoxDecoration(
+                  color: Theme.of(context)
+                      .colorScheme
+                      .surfaceContainerHighest
+                      .withAlpha(90),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .outlineVariant
+                        .withAlpha(90),
                   ),
-                  Expanded(
-                      child: TabBarView(
-                          controller: _tabController,
-                          children: const [
-                        Info(),
-                        AircraftBar(),
-                        CameraBar(),
-                        ExportBar()
-                      ]))
-                ],
-              ))
-        ];
+                ),
+                padding: const EdgeInsets.all(3),
+                child: TabBar(
+                  controller: _tabController,
+                  indicatorSize: TabBarIndicatorSize.tab,
+                  dividerColor: Colors.transparent,
+                  labelPadding: const EdgeInsets.symmetric(horizontal: 2),
+                  indicator: BoxDecoration(
+                    borderRadius: BorderRadius.circular(11),
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  labelColor: Theme.of(context).colorScheme.onPrimary,
+                  unselectedLabelColor:
+                      Theme.of(context).colorScheme.onSurfaceVariant,
+                  labelStyle:
+                      const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                  unselectedLabelStyle:
+                      const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+                  tabs: const [
+                    Tab(
+                      height: 38,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.info_outline, size: 16),
+                          SizedBox(width: 4),
+                          Text('Info'),
+                        ],
+                      ),
+                    ),
+                    Tab(
+                      height: 38,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.airplanemode_on, size: 16),
+                          SizedBox(width: 4),
+                          Text('Drone'),
+                        ],
+                      ),
+                    ),
+                    Tab(
+                      height: 38,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.photo_camera, size: 16),
+                          SizedBox(width: 4),
+                          Text('Cam'),
+                        ],
+                      ),
+                    ),
+                    Tab(
+                      height: 38,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.file_copy, size: 16),
+                          SizedBox(width: 4),
+                          Text('File'),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: TabBarView(
+                  controller: _tabController,
+                  children: const [
+                    Info(),
+                    AircraftBar(),
+                    CameraBar(),
+                    ExportBar(),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+
         return Scaffold(
-            appBar: const MappingAppBar(),
-            body: MediaQuery.of(context).size.width < 700
-                ? Column(
-                    children: children,
-                  )
-                : Row(children: children));
+          appBar: const MappingAppBar(),
+          body: MediaQuery.of(context).size.width < 700
+              ? Column(
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: mapWidget,
+                    ),
+                    Container(
+                      margin: const EdgeInsets.fromLTRB(10, 4, 10, 4),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .surfaceContainerHighest
+                            .withAlpha(90),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .outlineVariant
+                              .withAlpha(90),
+                        ),
+                      ),
+                      padding: const EdgeInsets.all(3),
+                      child: TabBar(
+                        controller: _tabController,
+                        indicatorSize: TabBarIndicatorSize.tab,
+                        dividerColor: Colors.transparent,
+                        labelPadding: const EdgeInsets.symmetric(horizontal: 2),
+                        indicator: BoxDecoration(
+                          borderRadius: BorderRadius.circular(11),
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        labelColor: Theme.of(context).colorScheme.onPrimary,
+                        unselectedLabelColor:
+                            Theme.of(context).colorScheme.onSurfaceVariant,
+                        labelStyle: const TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w700),
+                        unselectedLabelStyle: const TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w500),
+                        tabs: const [
+                          Tab(
+                            height: 38,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.info_outline, size: 16),
+                                SizedBox(width: 4),
+                                Text('Info'),
+                              ],
+                            ),
+                          ),
+                          Tab(
+                            height: 38,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.airplanemode_on, size: 16),
+                                SizedBox(width: 4),
+                                Text('Drone'),
+                              ],
+                            ),
+                          ),
+                          Tab(
+                            height: 38,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.photo_camera, size: 16),
+                                SizedBox(width: 4),
+                                Text('Cam'),
+                              ],
+                            ),
+                          ),
+                          Tab(
+                            height: 38,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.file_copy, size: 16),
+                                SizedBox(width: 4),
+                                Text('File'),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      flex: 2,
+                      child: TabBarView(
+                        controller: _tabController,
+                        children: const [
+                          Info(),
+                          AircraftBar(),
+                          CameraBar(),
+                          ExportBar(),
+                        ],
+                      ),
+                    ),
+                  ],
+                )
+              : Row(
+                  children: [
+                    Expanded(child: mapWidget),
+                    const VerticalDivider(width: 1, thickness: 1),
+                    sideMenuWidget,
+                  ],
+                ),
+        );
       },
     );
   }

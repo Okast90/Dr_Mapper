@@ -1,4 +1,5 @@
 import 'package:dji_mapper/core/drone_mapper_format.dart';
+import 'package:dji_mapper/core/drone_mapping_engine.dart';
 import 'package:dji_mapper/shared/map_provider.dart';
 import 'package:flutter_map/flutter_map.dart' hide Polygon;
 import 'package:geoxml/geoxml.dart';
@@ -95,9 +96,29 @@ class ExportBarState extends State<ExportBar> {
   Future<void> _importKmlContent(String kmlContent) async {
     final kml = await DroneMapperXml.fromKmlString(kmlContent);
 
-    if (kml.polygons.isEmpty && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("No polygons found in KML. Import cancelled")));
+    if (kml.polygons.isEmpty) {
+      if (kml.rtes.isNotEmpty || kml.trks.isNotEmpty) {
+        final pts = kml.rtes.isNotEmpty
+            ? kml.rtes.first.rtepts
+                .map((e) => LatLng(e.lat!, e.lon!))
+                .toList()
+            : kml.trks.first.trksegs
+                .expand((s) => s.trkpts)
+                .map((e) => LatLng(e.lat!, e.lon!))
+                .toList();
+        if (pts.isNotEmpty) {
+          final listenables =
+              Provider.of<ValueListenables>(context, listen: false);
+          listenables.mappingMode = MappingMode.corridor;
+          _loadPolygon(pts);
+          return;
+        }
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text("No polygons or routes found in KML. Import cancelled")));
+      }
       return;
     }
 
@@ -483,11 +504,23 @@ class ExportBarState extends State<ExportBar> {
   Future<void> _loadPolygon(List<LatLng> polygon) async {
     final mapProvider = Provider.of<MapProvider>(context, listen: false);
     final mapController = mapProvider.mapController;
+    final listenables = Provider.of<ValueListenables>(context, listen: false);
 
-    Provider.of<ValueListenables>(context, listen: false).polygon = polygon;
+    listenables.polygon = polygon;
+    if (listenables.mappingMode == MappingMode.corridor) {
+      listenables.centerline = List.from(polygon);
+      listenables.polygon = DroneMappingEngine.generateCorridorBufferPolygon(
+        polygon,
+        listenables.corridorWidth.toDouble(),
+      );
+    }
 
-    if (polygon.isNotEmpty) {
-      final bounds = LatLngBounds.fromPoints(polygon);
+    final targetPoints = listenables.polygon.isNotEmpty
+        ? listenables.polygon
+        : listenables.centerline;
+
+    if (targetPoints.isNotEmpty) {
+      final bounds = LatLngBounds.fromPoints(targetPoints);
 
       mapController.fitCamera(
         CameraFit.bounds(
@@ -500,7 +533,11 @@ class ExportBarState extends State<ExportBar> {
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Area imported successfully")),
+        SnackBar(
+          content: Text(listenables.mappingMode == MappingMode.corridor
+              ? "Corridor imported successfully"
+              : "Area imported successfully"),
+        ),
       );
     }
   }
@@ -521,22 +558,53 @@ class ExportBarState extends State<ExportBar> {
       return;
     }
 
-    if (listenables.polygon.length < 3) {
+    final points = listenables.polygon.isNotEmpty
+        ? listenables.polygon
+        : listenables.centerline;
+
+    if (points.length < 2) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("No polygon to export. Please add waypoints first")));
+          content: Text("No area to export. Please add waypoints first")));
       return;
     }
     var kml = DroneMapperXml();
-    kml.polygons = [
-      Polygon(
-        name: "Mapping Area",
-        outerBoundaryIs: Rte(
+    if (listenables.mappingMode == MappingMode.corridor &&
+        listenables.centerline.length >= 2) {
+      kml.rtes = [
+        Rte(
+          name: "Corridor Centerline",
+          rtepts: listenables.centerline
+              .map((element) =>
+                  Wpt(lat: element.latitude, lon: element.longitude))
+              .toList(),
+        )
+      ];
+      if (listenables.polygon.length >= 3) {
+        kml.polygons = [
+          Polygon(
+            name: "Corridor Boundary",
+            outerBoundaryIs: Rte(
+              rtepts: listenables.polygon
+                  .map((element) =>
+                      Wpt(lat: element.latitude, lon: element.longitude))
+                  .toList(),
+            ),
+          )
+        ];
+      }
+    } else {
+      kml.polygons = [
+        Polygon(
+          name: "Mapping Area",
+          outerBoundaryIs: Rte(
             rtepts: listenables.polygon
                 .map((element) =>
                     Wpt(lat: element.latitude, lon: element.longitude))
-                .toList()),
-      )
-    ];
+                .toList(),
+          ),
+        )
+      ];
+    }
 
     var kmlString = kml.toKmlString(pretty: true);
 
@@ -657,67 +725,78 @@ class ExportBarState extends State<ExportBar> {
                   ],
                 ),
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 14),
               _buildSectionCard(
                 context: context,
                 title: 'Survey mission',
-                subtitle: 'Export to the most common drone mission formats',
+                subtitle: 'Export to drone mission formats',
                 icon: Icons.flight_takeoff_rounded,
                 accent: colorScheme.primary,
-                child: Column(
+                child: Row(
                   children: [
-                    _buildActionButton(
-                      context: context,
-                      label: 'Save as DJI Fly Waypoint Mission',
-                      icon: Icons.flight,
-                      onPressed: () => _exportForDJIFly(listenables),
-                      accent: colorScheme.primary,
+                    Expanded(
+                      child: _buildGridActionButton(
+                        context: context,
+                        title: 'DJI Fly',
+                        subtitle: 'KMZ Waylines',
+                        icon: Icons.flight,
+                        onPressed: () => _exportForDJIFly(listenables),
+                        accent: colorScheme.primary,
+                      ),
                     ),
-                    const SizedBox(height: 12),
-                    _buildActionButton(
-                      context: context,
-                      label: 'Save as Litchi Mission',
-                      icon: Icons.map_outlined,
-                      onPressed: () => _exportForLithi(listenables),
-                      accent: colorScheme.secondary,
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _buildGridActionButton(
+                        context: context,
+                        title: 'Litchi',
+                        subtitle: 'CSV Mission',
+                        icon: Icons.map_outlined,
+                        onPressed: () => _exportForLithi(listenables),
+                        accent: colorScheme.secondary,
+                      ),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 14),
               _buildSectionCard(
                 context: context,
                 title: 'Mapping area',
-                subtitle: 'Import or export your KML polygon boundary',
+                subtitle: 'Import or export polygon boundary',
                 icon: Icons.map_rounded,
                 accent: colorScheme.tertiary,
                 child: Column(
                   children: [
-                    Wrap(
-                      alignment: WrapAlignment.center,
-                      spacing: 12,
-                      runSpacing: 12,
+                    Row(
                       children: [
-                        Tooltip(
-                          message: 'This will override the current mapping area',
-                          child: _buildActionButton(
-                            context: context,
-                            label: 'Import from KML',
-                            icon: Icons.upload_file,
-                            onPressed: () => _importFromKml(listenables),
-                            accent: colorScheme.tertiary,
+                        Expanded(
+                          child: Tooltip(
+                            message:
+                                'This will override the current mapping area',
+                            child: _buildGridActionButton(
+                              context: context,
+                              title: 'Import KML',
+                              subtitle: 'Load boundary',
+                              icon: Icons.upload_file,
+                              onPressed: () => _importFromKml(listenables),
+                              accent: colorScheme.tertiary,
+                            ),
                           ),
                         ),
-                        _buildActionButton(
-                          context: context,
-                          label: 'Export to KML',
-                          icon: Icons.download,
-                          onPressed: () => _exportAreaToKml(listenables),
-                          accent: colorScheme.primary,
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _buildGridActionButton(
+                            context: context,
+                            title: 'Export KML',
+                            subtitle: 'Save boundary',
+                            icon: Icons.download,
+                            onPressed: () => _exportAreaToKml(listenables),
+                            accent: colorScheme.primary,
+                          ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 14),
                     DragTarget<String>(
                       onWillAcceptWithDetails: (details) =>
                           details.data.toLowerCase().endsWith('.kml'),
@@ -944,41 +1023,72 @@ class ExportBarState extends State<ExportBar> {
     );
   }
 
-  Widget _buildActionButton({
+
+  Widget _buildGridActionButton({
     required BuildContext context,
-    required String label,
+    required String title,
+    required String subtitle,
     required IconData icon,
     required VoidCallback onPressed,
     required Color accent,
   }) {
     final colorScheme = Theme.of(context).colorScheme;
 
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 420),
-      child: FilledButton.icon(
-        onPressed: onPressed,
-        style: FilledButton.styleFrom(
-          backgroundColor: accent.withAlpha(220),
-          foregroundColor: colorScheme.onPrimary,
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
-          minimumSize: const Size.fromHeight(56),
-        ),
-        icon: Container(
-          width: 30,
-          height: 30,
+    return Material(
+      color: accent.withAlpha(24),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onPressed,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
           decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: colorScheme.onPrimary.withAlpha(18),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: accent.withAlpha(120),
+              width: 1.2,
+            ),
           ),
-          child: Icon(icon, size: 18),
-        ),
-        label: Text(
-          label,
-          textAlign: TextAlign.center,
-          style: const TextStyle(fontWeight: FontWeight.w700),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: accent.withAlpha(40),
+                ),
+                child: Icon(icon, color: accent, size: 17),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: colorScheme.onSurface,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (subtitle.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );

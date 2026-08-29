@@ -23,7 +23,12 @@ class _InfoState extends State<Info> {
       var photoIntervalLabel = '0h 00m 00s';
       var missionWaypoints = listenables.photoLocations;
 
-      if (listenables.polygon.length > 2) {
+      final isCorridorValid = listenables.mappingMode == MappingMode.corridor &&
+          (listenables.centerline.length >= 2 || listenables.polygon.length >= 2);
+      final isGridValid = listenables.mappingMode == MappingMode.grid &&
+          listenables.polygon.length > 2;
+
+      if (isCorridorValid || isGridValid) {
         final engine = DroneMappingEngine(
           altitude: listenables.altitude.toDouble(),
           forwardOverlap: listenables.forwardOverlap / 100,
@@ -37,12 +42,30 @@ class _InfoState extends State<Info> {
           groundOffset: listenables.groundOffset.toDouble(),
         );
 
-        missionWaypoints = engine.generateWaypoints(
-          listenables.polygon,
-          listenables.createCameraPoints,
-          listenables.fillGrid,
-          listenables.homePoint,
-        );
+        if (listenables.mappingMode == MappingMode.corridor) {
+          final activeCenterline = listenables.centerline.isNotEmpty
+              ? listenables.centerline
+              : listenables.polygon;
+          missionWaypoints = engine.generateCorridorWaypoints(
+            centerline: activeCenterline,
+            corridorWidth: listenables.corridorWidth.toDouble(),
+            flightLines: listenables.corridorFlightLines,
+            createCameraPoints: listenables.createCameraPoints,
+            homePoint: listenables.homePoint,
+          );
+          area = DroneMappingEngine.calculateCorridorArea(
+            activeCenterline,
+            listenables.corridorWidth.toDouble(),
+          ).round();
+        } else {
+          missionWaypoints = engine.generateWaypoints(
+            listenables.polygon,
+            listenables.createCameraPoints,
+            listenables.fillGrid,
+            listenables.homePoint,
+          );
+          area = DroneMappingEngine.calculateArea(listenables.polygon).round();
+        }
 
         final mainDistance = DroneMappingEngine.calculateTotalDistance(missionWaypoints);
         final takeoffDistance = listenables.homePoint != null && missionWaypoints.isNotEmpty
@@ -59,7 +82,6 @@ class _InfoState extends State<Info> {
             : 0.0;
 
         totalDistance = (mainDistance + takeoffDistance + returnDistance).round();
-        area = DroneMappingEngine.calculateArea(listenables.polygon).round();
         recommendedShutterSpeed =
           DroneMappingEngine.calculateRecommendedShutterSpeed(
             altitude: listenables.altitude - listenables.groundOffset,
@@ -96,129 +118,284 @@ class _InfoState extends State<Info> {
         photoIntervalLabel = '${intervalHours}h ${intervalMinutes}m ${intervalSeconds}s';
       }
 
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 12),
-          _buildToggleCard(
-            context: context,
-            children: [
-              SwitchListTile(
-                title: const Text('Create Photo Points'),
-                value: listenables.createCameraPoints,
-                onChanged: (value) {
-                  setState(() {
-                    listenables.createCameraPoints = value;
-                  });
-                },
-              ),
-              SwitchListTile(
-                title: Text(listenables.createCameraPoints ? 'Show Photo Points' : 'Show Waypoints'),
-                value: listenables.showPoints,
-                onChanged: (value) {
-                  setState(() {
-                    listenables.showPoints = value;
-                  });
-                },
-              ),
-              SwitchListTile(
-                title: const Text('Fill Grid'),
-                value: listenables.fillGrid,
-                onChanged: (value) {
-                  setState(() {
-                    listenables.fillGrid = value;
-                  });
-                },
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Card(
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(18),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Theme.of(context).colorScheme.surface,
-                    Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(120),
+      return SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Mission Options',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    GridView.count(
+                      crossAxisCount: 2,
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      mainAxisSpacing: 8,
+                      crossAxisSpacing: 8,
+                      childAspectRatio: 2.2,
+                      children: [
+                        _buildGridToggle(
+                          context: context,
+                          title: 'Photo Points',
+                          icon: Icons.camera_alt_outlined,
+                          value: listenables.createCameraPoints,
+                          onChanged: (val) {
+                            setState(() {
+                              listenables.createCameraPoints = val;
+                            });
+                          },
+                        ),
+                        _buildGridToggle(
+                          context: context,
+                          title: listenables.createCameraPoints ? 'Show Photos' : 'Show Waypts',
+                          icon: Icons.visibility_outlined,
+                          value: listenables.showPoints,
+                          onChanged: (val) {
+                            setState(() {
+                              listenables.showPoints = val;
+                            });
+                          },
+                        ),
+                        _buildGridToggle(
+                          context: context,
+                          title: 'Fill Grid',
+                          icon: Icons.grid_on_rounded,
+                          value: listenables.fillGrid,
+                          onChanged: (val) {
+                            setState(() {
+                              listenables.fillGrid = val;
+                            });
+                          },
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Mission summary',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      color: Theme.of(context).colorScheme.onSurface,
-                    ),
+            ),
+            const SizedBox(height: 14),
+            Card(
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(18),
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Theme.of(context).colorScheme.surface,
+                      Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(120),
+                    ],
                   ),
-                  const SizedBox(height: 12),
-                  if (listenables.createCameraPoints)
-                    _statRow('Number of photos', '${listenables.photoLocations.length}')
-                  else
-                    _statRow('Number of waypoints', '${listenables.photoLocations.length}'),
-                  const Divider(height: 24),
-                  _statRow('Flight distance', '$totalDistance m'),
-                  const Divider(height: 24),
-                  _statRow('Area', '$area m²'),
-                  const Divider(height: 24),
-                  _statRow('Flight time estimate', estimatedFlightLabel),
-                  const Divider(height: 24),
-                  _statRow('Recommended shutter speed', '$recommendedShutterSpeed or faster'),
-                  const Divider(height: 24),
-                  _statRow('Photo interval', photoIntervalLabel),
-                ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Mission Summary',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    GridView.count(
+                      crossAxisCount: 2,
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      mainAxisSpacing: 10,
+                      crossAxisSpacing: 10,
+                      childAspectRatio: 1.6,
+                      children: [
+                        _buildStatGridTile(
+                          context: context,
+                          icon: listenables.createCameraPoints
+                              ? Icons.photo_library_outlined
+                              : Icons.pin_drop_outlined,
+                          label: listenables.createCameraPoints ? 'Photos' : 'Waypoints',
+                          value: '${listenables.photoLocations.length}',
+                        ),
+                        _buildStatGridTile(
+                          context: context,
+                          icon: Icons.straighten_outlined,
+                          label: 'Distance',
+                          value: '$totalDistance m',
+                        ),
+                        _buildStatGridTile(
+                          context: context,
+                          icon: Icons.crop_free_outlined,
+                          label: 'Area',
+                          value: '$area m²',
+                        ),
+                        _buildStatGridTile(
+                          context: context,
+                          icon: Icons.timer_outlined,
+                          label: 'Est. Time',
+                          value: estimatedFlightLabel,
+                        ),
+                        _buildStatGridTile(
+                          context: context,
+                          icon: Icons.speed_outlined,
+                          label: 'Shutter',
+                          value: '$recommendedShutterSpeed or faster',
+                        ),
+                        _buildStatGridTile(
+                          context: context,
+                          icon: Icons.timelapse_outlined,
+                          label: 'Interval',
+                          value: photoIntervalLabel,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       );
     }));
   }
-  Widget _buildToggleCard({
+
+  Widget _buildGridToggle({
     required BuildContext context,
-    required List<Widget> children,
+    required String title,
+    required IconData icon,
+    required bool value,
+    required ValueChanged<bool> onChanged,
   }) {
-    return Card(
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(18),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Theme.of(context).colorScheme.surface,
-              Theme.of(context).colorScheme.surfaceContainerHighest.withAlpha(120),
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Material(
+      color: value
+          ? colorScheme.primary.withAlpha(28)
+          : colorScheme.surfaceContainerHighest.withAlpha(80),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => onChanged(!value),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: value
+                  ? colorScheme.primary.withAlpha(180)
+                  : colorScheme.outlineVariant.withAlpha(90),
+              width: 1.2,
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: value
+                      ? colorScheme.primary
+                      : colorScheme.onSurfaceVariant.withAlpha(25),
+                ),
+                child: Icon(
+                  value ? Icons.check_rounded : icon,
+                  size: 14,
+                  color: value
+                      ? colorScheme.onPrimary
+                      : colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: value ? FontWeight.w700 : FontWeight.w500,
+                    color: value ? colorScheme.primary : colorScheme.onSurface,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ],
           ),
         ),
-        child: Column(children: children),
       ),
     );
   }
 
-  Widget _statRow(String label, String value) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Flexible(
-          child: Text(
-            label,
-            style: const TextStyle(fontSize: 15),
+  Widget _buildStatGridTile({
+    required BuildContext context,
+    required IconData icon,
+    required String label,
+    required String value,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withAlpha(90),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: colorScheme.outlineVariant.withAlpha(100),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(3),
+                decoration: BoxDecoration(
+                  color: colorScheme.primary.withAlpha(24),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Icon(icon, size: 13, color: colorScheme.primary),
+              ),
+              const SizedBox(width: 5),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ),
-        ),
-        const SizedBox(width: 12),
-        Text(
-          value,
-          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
-        ),
-      ],
+          const SizedBox(height: 5),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+              color: colorScheme.onSurface,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
     );
-  }}
+  }
+}

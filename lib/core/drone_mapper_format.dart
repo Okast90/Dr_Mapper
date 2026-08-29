@@ -19,6 +19,9 @@ class DroneMapperXml extends GeoXml {
     GeoXml geoXml = await GeoXml.fromKmlString(flattenedKml);
     var dmXml = DroneMapperXml();
     dmXml.polygons = geoXml.polygons;
+    dmXml.rtes = geoXml.rtes;
+    dmXml.trks = geoXml.trks;
+    dmXml.wpts = geoXml.wpts;
     return dmXml;
   }
 }

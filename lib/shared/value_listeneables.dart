@@ -4,9 +4,48 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+enum MappingMode { grid, corridor }
+
 class ValueListenables extends ChangeNotifier {
   static const int minAltitude = 100;
   static const int maxAltitude = 5000;
+
+  /// Mapping mode: Grid (surface) or Corridor (linear)
+  final _mappingMode = ValueNotifier<MappingMode>(MappingMode.grid);
+  MappingMode get mappingMode => _mappingMode.value;
+  set mappingMode(MappingMode value) {
+    if (_mappingMode.value == value) return;
+    _mappingMode.value = value;
+    notifyListeners();
+  }
+
+  /// Corridor buffer total width in meters
+  final _corridorWidth = ValueNotifier<int>(50);
+  int get corridorWidth => _corridorWidth.value;
+  set corridorWidth(int value) {
+    final safeValue = value.clamp(10, 1000);
+    if (_corridorWidth.value == safeValue) return;
+    _corridorWidth.value = safeValue;
+    notifyListeners();
+  }
+
+  /// Number of flight lines in corridor mode (1 = centerline, 2 = dual pass, etc.)
+  final _corridorFlightLines = ValueNotifier<int>(1);
+  int get corridorFlightLines => _corridorFlightLines.value;
+  set corridorFlightLines(int value) {
+    final safeValue = value.clamp(1, 5);
+    if (_corridorFlightLines.value == safeValue) return;
+    _corridorFlightLines.value = safeValue;
+    notifyListeners();
+  }
+
+  /// Centerline coordinates for corridor mapping
+  final _centerline = ValueNotifier<List<LatLng>>([]);
+  List<LatLng> get centerline => _centerline.value;
+  set centerline(List<LatLng> value) {
+    _centerline.value = value;
+    notifyListeners();
+  }
 
   /// Altitude in meters
   final _altitude = ValueNotifier<int>(minAltitude);
@@ -135,6 +174,24 @@ class ValueListenables extends ChangeNotifier {
   bool get fillGrid => _fillGrid.value;
   set fillGrid(bool value) {
     _fillGrid.value = value;
+    notifyListeners();
+  }
+
+  /// Apply an inset (negative) border buffer so camera centres stay inside the polygon
+  /// and the physical footprint still covers the exact boundary.
+  final _useInsetBuffer = ValueNotifier<bool>(true);
+  bool get useInsetBuffer => _useInsetBuffer.value;
+  set useInsetBuffer(bool value) {
+    _useInsetBuffer.value = value;
+    notifyListeners();
+  }
+
+  /// Decompose non-convex polygons into convex sub-polygons before sweeping,
+  /// eliminating coverage holes in concave corners ("L"/"U"/"star" shapes).
+  final _useConvexDecomposition = ValueNotifier<bool>(true);
+  bool get useConvexDecomposition => _useConvexDecomposition.value;
+  set useConvexDecomposition(bool value) {
+    _useConvexDecomposition.value = value;
     notifyListeners();
   }
 
