@@ -34,6 +34,7 @@ dependencies:
   package_info_plus: ^9.0.1
   geoxml: ^2.6.2
   universal_io: ^2.3.1
+  image: ^4.3.0
 
 dependency_overrides:
   geolocator_android: 4.5.4

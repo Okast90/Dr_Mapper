@@ -8,11 +8,50 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-late SharedPreferences prefs;
+late final PreferencesStore prefs;
+
+class PreferencesStore {
+  final SharedPreferences? _preferences;
+  final Map<String, Object> _fallbackValues = <String, Object>{};
+
+  PreferencesStore(this._preferences);
+
+  bool? getBool(String key) => _preferences?.getBool(key) ?? _fallbackValues[key] as bool?;
+  int? getInt(String key) => _preferences?.getInt(key) ?? _fallbackValues[key] as int?;
+  String? getString(String key) => _preferences?.getString(key) ?? _fallbackValues[key] as String?;
+
+  Future<bool> setBool(String key, bool value) async {
+    if (_preferences != null) return _preferences.setBool(key, value);
+    _fallbackValues[key] = value;
+    return true;
+  }
+
+  Future<bool> setInt(String key, int value) async {
+    if (_preferences != null) return _preferences.setInt(key, value);
+    _fallbackValues[key] = value;
+    return true;
+  }
+
+  Future<bool> setString(String key, String value) async {
+    if (_preferences != null) return _preferences.setString(key, value);
+    _fallbackValues[key] = value;
+    return true;
+  }
+
+  Future<bool> remove(String key) async {
+    if (_preferences != null) return _preferences.remove(key);
+    _fallbackValues.remove(key);
+    return true;
+  }
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  prefs = await SharedPreferences.getInstance();
+  try {
+    prefs = PreferencesStore(await SharedPreferences.getInstance());
+  } catch (_) {
+    prefs = PreferencesStore(null);
+  }
   PresetManager.init();
   runApp(const MyApp());
 }

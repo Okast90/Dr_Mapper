@@ -4,18 +4,26 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
-enum MappingMode { grid, corridor }
+enum MappingMode { grid, corridor, waypoint }
 
 class ValueListenables extends ChangeNotifier {
   static const int minAltitude = 100;
   static const int maxAltitude = 5000;
 
-  /// Mapping mode: Grid (surface) or Corridor (linear)
+  /// Mapping mode: Grid (surface), Corridor (linear), or Waypoint (direct track/points)
   final _mappingMode = ValueNotifier<MappingMode>(MappingMode.grid);
   MappingMode get mappingMode => _mappingMode.value;
   set mappingMode(MappingMode value) {
     if (_mappingMode.value == value) return;
     _mappingMode.value = value;
+    notifyListeners();
+  }
+
+  /// Direct waypoints list for waypoint mission mode
+  final _waypoints = ValueNotifier<List<LatLng>>([]);
+  List<LatLng> get waypoints => _waypoints.value;
+  set waypoints(List<LatLng> value) {
+    _waypoints.value = value;
     notifyListeners();
   }
 

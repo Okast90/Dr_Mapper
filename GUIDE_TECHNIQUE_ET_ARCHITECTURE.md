@@ -125,7 +125,7 @@ void main() async {
 ### 3.2 Moteur Algorithmique & Formats (`lib/core/`)
 
 #### `lib/core/drone_mapping_engine.dart`
-C'est le **cœur scientifique et géométrique** de tout le projet (1 300+ lignes). Il est exempt de toute dépendance à l'UI Flutter, ce qui le rend ultra-rapide et 100% testable unitairement.
+C'est le **cœur scientifique et géométrique** de tout le projet (1 350+ lignes). Il est exempt de toute dépendance à l'UI Flutter, ce qui le rend ultra-rapide et 100% testable unitairement.
 
 - **Attributs clés** :
   - `altitude`, `forwardOverlap`, `sideOverlap`, `sensorWidth`, `sensorHeight`, `focalLength`, `imageWidth`, `imageHeight`, `angle`, `groundOffset`.
@@ -136,26 +136,33 @@ C'est le **cœur scientifique et géométrique** de tout le projet (1 300+ ligne
 - **Fonctions principales** :
   1. `generateWaypoints(polygon, createCameraPoints, fillGrid, homePoint, useInsetBuffer, useConvexDecomposition)` :
      Génère le parcours complet en grille ou décomposition convexe.
-  2. `_findOptimalSweepAngle(polygon)` :
+  2. `generateDirectWaypoints({waypoints, createCameraPoints, homePoint})` :
+     Génère une mission directe suivant une séquence de waypoints / trace GPX et optimise le point de départ en fonction de la proximité du point Home.
+  3. `_findOptimalSweepAngle(polygon)` :
      Teste 36 orientations ($0^\circ$ à $175^\circ$) et choisit l'angle minimisant le nombre de virages.
-  3. `_insetPolygon(polygon, insetDist)` :
+  4. `_insetPolygon(polygon, insetDist)` :
      Applique une érosion normale (*negative buffer*) sur la bordure.
-  4. `_isConvexPolygon(poly)`, `_earClip(poly)`, `_hertelMehlhorn(poly, triangles)` :
+  5. `_isConvexPolygon(poly)`, `_earClip(poly)`, `_hertelMehlhorn(poly, triangles)` :
      Décompose les polygones concaves en sous-polygones convexes indépendants.
-  5. `generateCorridorBufferPolygon(centerline, width)` & `generateCorridorWaypoints(...)` :
+  6. `generateCorridorBufferPolygon(centerline, width)` & `generateCorridorWaypoints(...)` :
      Génère le polygone tampon et les lignes de vol multi-passes (1 à 5 lignes) le long d'une polyligne.
-  6. `generatePhotoFootprints(photoLocations)` :
+  7. `generatePhotoFootprints(photoLocations)` :
      Calcule les 4 sommets géographiques du polygone de chaque cliché pour le contrôle qualité.
-  7. `calculateCoveragePercentage(polygon, photoLocations)` :
+  8. `calculateCoveragePercentage(polygon, photoLocations)` :
      Calcule le pourcentage exact de zone couverte par échantillonnage surfacique.
-  8. `generateResidualFillWaypoints(...)` :
+  9. `generateResidualFillWaypoints(...)` :
      Détecte et génère des waypoints de remplissage sur les îlots non couverts.
 
 #### `lib/core/drone_mapper_format.dart`
-- **Rôle** : Parse et sérialise les fichiers KML standard à l'aide du package `geoxml`.
+- **Rôle** : Parse et sérialise les fichiers KML et GPX standard à l'aide du package `geoxml`.
 - **Fonctions clés** :
-  - `loadKml(String content)` : Extrait les polygones (`kml.polygons`), les routes (`kml.rtes`), les tracés (`kml.trks`) et les waypoints (`kml.wpts`).
-  - `exportKml(List<LatLng> polygon, List<LatLng> waypoints)` : Génère un document KML valide contenant la zone et les points de vol.
+  - `fromKmlString(String kml)` : Extrait les polygones, routes, tracés et waypoints KML après dé-encapsulation (`_flattenKml`).
+  - `fromGpxString(String gpx)` : Instancie un conteneur `DroneMapperXml` à partir d'un fichier GPX.
+  - `parseGpxFeatures(String gpx)` : Analyse complète extrayant tous les objets navigables (`List<GpxFeature>`) :
+    - Traces (`<trk>` / `<trkseg>` / `<trkpt>`) avec coordonnées, altitudes `ele` et timestamps.
+    - Itinéraires (`<rte>` / `<rtept>`) avec coordonnées et descriptions.
+    - Waypoints isolés (`<wpt>`) avec noms et coordonnées.
+  - `GpxFeature` : Modèle de données enrichi avec propriété `isClosedLoop` (détection de boucles fermées).
 
 ---
 
@@ -165,21 +172,23 @@ C'est le **cœur scientifique et géométrique** de tout le projet (1 300+ ligne
 - **Rôle** : L'écran principal de l'application. Gère la carte interactive (`FlutterMap`), le panneau latéral accordéon, la barre d'outils flottante et la barre de recherche.
 - **Fonctionnalités clés** :
   - **Couches cartographiques** : Support de `MapLayer.streets` (Google Plans), `MapLayer.satellite` (Google Satellite) et `MapLayer.openStreetMap` (TileLayer OSM avec filtre dark mode).
+  - **Prise en charge des 3 modes de vol** (`Grid`, `Corridor`, `Waypoint`).
   - **Barre d'outils cartographique (`_mapActionButton`)** :
-    - Mode Tracé polygone / polyligne.
-    - Mode Édition / Déplacement des sommets.
+    - Mode Tracé polygone / polyligne / waypoints.
+    - Mode Édition / Déplacement des sommets par `DragMarkers`.
     - Alignement rectiligne & Orthogonalisation à 90°.
     - **Bouton Radar de Contrôle Qualité (QC)** : Active/désactive la couche des ombres de couverture.
-    - Effacement complet du polygone / corridor.
+    - Effacement complet de la mission et des tracés.
   - **Recherche de lieu** : Autocomplete OpenStreetMap Nominatim géocodé.
   - **Badge de Couverture $\%$** : Affiche le pourcentage de surface couverte calculé en temps réel juste à côté de la recherche.
 
 #### `lib/layouts/aircraft.dart`
 - **Rôle** : Panneau de configuration du vol et de l'aéronef.
 - **Sections** :
-  - *Survey Mode* : Sélecteur visuel entre **Grid (Area)** et **Corridor (Linear)**.
+  - *Survey Mode* : Sélecteur visuel à 3 cartes : **Grid (Area)**, **Corridor (Linear)**, et **Waypoints (Trace / GPX)**.
   - *Flight Parameters* : Altitude (100–5 000 m), Ground Offset, Vitesse (m/s), Délai par waypoint.
   - *Corridor Parameters* (si mode Corridor) : Largeur tampon (10–1 000 m), Sélecteur de passes (1, 2, 3, 4, 5 lignes).
+  - *Waypoint Parameters* (si mode Waypoint) : Orientation de la nacelle (Gimbal Pitch Angle).
   - *Mapping Coverage* (si mode Grille) : Recouvrement frontal (Overlap), latéral (Sidelap), Slider de rotation (avec affichage `Auto (Optimal)` à 0°), et toggles d'optimisation géométrique (`Convex Split` et `Border Margin`).
   - *Actions & Safety* : Comportement en fin de mission (Hover, RTH, Land) et perte RC.
 
@@ -193,13 +202,17 @@ C'est le **cœur scientifique et géométrique** de tout le projet (1 300+ ligne
 #### `lib/layouts/info.dart`
 - **Rôle** : Tableau de bord des statistiques de mission en temps réel.
 - **Métriques calculées** :
-  - Surface totale ($m^2$ ou $ha$) ou Longueur du corridor ($m$ / $km$).
+  - Surface totale ($m^2$ ou $ha$), Longueur du corridor ($m$ / $km$), ou Séquence de waypoints.
   - Nombre de photos à capturer et nombre total de waypoints.
   - Distance totale de vol estimée et durée de mission (avec alertes de batterie si > 25 min).
   - GSD (Ground Sample Distance en $cm/px$) et vitesse d'obturation recommandée pour éviter le flou de bougé.
 
 #### `lib/layouts/export.dart`
 - **Rôle** : Hub d'exportation et d'importation de missions.
+- **Options d'import** :
+  - **Import GPX** (`.gpx`) : Extraction de traces, routes et waypoints avec modale de sélection de trace et choix du mode de plan de vol.
+  - **Import KML** (`.kml`) : Importation de contours polygonaux et de tracés.
+  - **Drag & Drop** : Glisser-déposer universel pour fichiers `.gpx` et `.kml`.
 - **Options d'export** :
   - **DJI Fly / Pilot 2 (KMZ / WPML)** : Archive compressée directement injectable dans la radiocommande DJI (RC 2, RC Pro, etc.).
   - **Litchi (CSV)** : Fichier CSV pour les drones compatibles SDK v4.

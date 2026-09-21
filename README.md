@@ -10,17 +10,22 @@ A modern mapping and waypoint mission planner for DJI drones.
 
 ## Overview
 
-DJI Mapper helps you define a survey area on a map (both **surfacic 2D/3D grids** and **linear corridors**), generate optimized drone flight paths automatically, and export missions in formats compatible with DJI Fly, DJI Pilot 2 (KMZ/WPML) and Litchi.
+DJI Mapper helps you define a survey area on a map (**surfacic 2D/3D grids**, **linear corridors**, or **direct GPX waypoint tracks**), generate optimized drone flight paths automatically, and export missions in formats compatible with DJI Fly, DJI Pilot 2 (KMZ/WPML) and Litchi (CSV).
 
-The app is designed for rapid aerial mapping workflows: draw the polygon or corridor centerline, refine the contour, tune camera and geometric optimization settings, monitor real-time coverage percentage, inspect photo footprints for quality control, and export ready-to-use mission files.
+The app is designed for rapid aerial mapping workflows: draw polygons, corridors or import GPX traces, refine contours, tune camera and geometric optimization settings, monitor real-time coverage percentage, inspect photo footprints for quality control, and export ready-to-use mission files.
 
 ## Features
 
 - **Cross-platform support**: Runs on Windows, Linux, macOS, Android and the Web.
-- **Dedicated Mapping Modes**:
-  - **Grid Mode (Area)**: Surface photogrammetry for parcels, fields, rooftops, and buildings.
+- **3 Dedicated Mapping & Mission Modes**:
+  - **Grid Mode (Area)**: Surface photogrammetry for parcels, fields, rooftops, and buildings with boustrophedon sweep and crosshatch grid.
   - **Corridor Mode (Linear)**: Dedicated workflow for linear structures (roads, power lines, pipelines, rivers, fences) with adjustable buffer width (10 to 1,000 m) and 1 to 5 flight passes.
-- **Direct on-map drawing & editing**: Create polygons or polyline centerlines directly on the map, move vertices, delete individual points, straighten contours, or convert to 90° orthogonal geometry.
+  - **Waypoint Mode (Direct GPX / Trace)**: Follow imported GPS waypoints, tracks, or custom flight paths sequentially with customizable speed, altitude, gimbal pitch, and photo triggers.
+- **Comprehensive GPX & KML Import**:
+  - Drag & Drop or file picker for `.gpx` and `.kml` files.
+  - Supports GPX tracks (`<trk>`), routes (`<rte>`), and standalone waypoints (`<wpt>`).
+  - Interactive import dialog allowing track selection and one-click flight mode conversion.
+- **Direct on-map drawing & editing**: Create polygons, centerline polylines, or waypoints directly on the map, move vertices, delete individual points, straighten contours, or convert to 90° orthogonal geometry.
 - **Coverage Quality Control (Photo Footprints & Shadows)**:
   - Ground footprint projection of each photograph based on sensor size, focal length, altitude and flight orientation.
   - Translucent shadow stacking to immediately identify coverage gaps and holes.
@@ -31,12 +36,12 @@ The app is designed for rapid aerial mapping workflows: draw the polygon or corr
   - **Adaptive Margin Inset Buffer**: Keeps camera centers within boundaries while ensuring photo footprints cover exterior borders.
   - **Convex Partitioning (Ear-Clipping & Hertel-Mehlhorn)**: Decomposes complex or concave polygons (L, U, or star shapes) into convex sub-zones, eliminating coverage holes in interior corners.
   - **Residual Gap Fill**: Detects and covers residual unmapped gaps.
-- **Multiple Map Layers**: Google Plans (Streets), Google Satellite (Hybrid), and OpenStreetMap (OSM).
+- **Multiple Map Layers**: Google Plans (Streets), Google Satellite (Hybrid), and OpenStreetMap (OSM) with dark mode auto-styling.
 - **Full DJI & Litchi Export**:
   - **DJI Fly / DJI Pilot 2**: Complete `.kmz` archive with `template.kml` and `waylines.wpml`.
   - **Litchi**: `.csv` waypoint missions.
   - **KML**: Import and export of boundary polygons and linear routes.
-- **Live weather and GPS**: Monitor real-time wind speed, temperature, and GPS satellite status in the top bar.
+- **Live Weather & GPS**: Real-time wind speed, temperature via Open-Meteo, and GPS satellite status in the top bar.
 
 ## How it works
 

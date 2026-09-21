@@ -214,6 +214,232 @@ class ExportBarState extends State<ExportBar> {
     await _importKmlContent(content);
   }
 
+  Future<void> _importFromGpx(ValueListenables listenables) async {
+    var file = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ["gpx"],
+        dialogTitle: "Importer un fichier GPX");
+
+    if (file == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text("Aucun fichier sélectionné. Import annulé.")));
+      }
+      return;
+    }
+
+    await _importGpxFromPlatformFile(file.files.single);
+  }
+
+  Future<void> _importGpxFromPlatformFile(PlatformFile file) async {
+    if (!file.name.toLowerCase().endsWith('.gpx')) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text("Seuls les fichiers .gpx sont acceptés ici")));
+      }
+      return;
+    }
+
+    String content;
+    if (file.bytes != null) {
+      content = utf8.decode(file.bytes!, allowMalformed: true);
+    } else if (file.path != null) {
+      content = await File(file.path!).readAsString();
+    } else {
+      return;
+    }
+
+    await _importGpxContent(content);
+  }
+
+  Future<void> _importGpxContent(String gpxContent) async {
+    final features = await DroneMapperXml.parseGpxFeatures(gpxContent);
+
+    if (features.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text("Aucune trace, itinéraire ou waypoint trouvé dans le GPX.")));
+      }
+      return;
+    }
+
+    if (!mounted) return;
+
+    int selectedFeatureIndex = 0;
+    MappingMode selectedMode = MappingMode.waypoint;
+
+    await showDialog(
+      context: context,
+      builder: (context) {
+        final colorScheme = Theme.of(context).colorScheme;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final currentFeature = features[selectedFeatureIndex];
+            return AlertDialog(
+              title: Row(
+                children: [
+                  Icon(Icons.timeline_rounded, color: colorScheme.primary),
+                  const SizedBox(width: 10),
+                  const Text("Importer le fichier GPX"),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: SizedBox(
+                  width: 460,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (features.length > 1) ...[
+                        Text(
+                          "Sélectionnez l'élément GPX (${features.length} trouvés) :",
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                        const SizedBox(height: 8),
+                        Container(
+                          constraints: const BoxConstraints(maxHeight: 180),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: colorScheme.outlineVariant),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: ListView.separated(
+                            shrinkWrap: true,
+                            itemCount: features.length,
+                            separatorBuilder: (_, __) => const Divider(height: 1),
+                            itemBuilder: (context, idx) {
+                              final f = features[idx];
+                              final isSelected = selectedFeatureIndex == idx;
+                              return ListTile(
+                                dense: true,
+                                leading: Icon(
+                                  f.type == GpxFeatureType.track
+                                      ? Icons.route_rounded
+                                      : f.type == GpxFeatureType.route
+                                          ? Icons.alt_route_rounded
+                                          : Icons.place_rounded,
+                                  color: isSelected ? colorScheme.primary : colorScheme.onSurfaceVariant,
+                                ),
+                                title: Text(f.name, style: TextStyle(fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
+                                subtitle: Text('${f.pointCount} points${f.description.isNotEmpty ? ' • ${f.description}' : ''}'),
+                                trailing: isSelected ? Icon(Icons.check_circle, color: colorScheme.primary) : null,
+                                selected: isSelected,
+                                onTap: () => setDialogState(() => selectedFeatureIndex = idx),
+                              );
+                            },
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                      const Text(
+                        "Mode de plan de vol à appliquer :",
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      const SizedBox(height: 8),
+                      RadioListTile<MappingMode>(
+                        dense: true,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        tileColor: selectedMode == MappingMode.waypoint ? colorScheme.primaryContainer.withAlpha(80) : null,
+                        value: MappingMode.waypoint,
+                        groupValue: selectedMode,
+                        onChanged: (val) => setDialogState(() => selectedMode = val!),
+                        secondary: const Icon(Icons.timeline_rounded),
+                        title: const Text("Suivi direct de Waypoints", style: TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: Text("Le drone suit la séquence exacte des ${currentFeature.pointCount} points."),
+                      ),
+                      const SizedBox(height: 6),
+                      RadioListTile<MappingMode>(
+                        dense: true,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        tileColor: selectedMode == MappingMode.corridor ? colorScheme.primaryContainer.withAlpha(80) : null,
+                        value: MappingMode.corridor,
+                        groupValue: selectedMode,
+                        onChanged: (val) => setDialogState(() => selectedMode = val!),
+                        secondary: const Icon(Icons.alt_route_rounded),
+                        title: const Text("Corridor linéaire (Photogrammétrie)", style: TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: const Text("Utilise la trace comme axe central avec buffer et passes de vol."),
+                      ),
+                      const SizedBox(height: 6),
+                      RadioListTile<MappingMode>(
+                        dense: true,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        tileColor: selectedMode == MappingMode.grid ? colorScheme.primaryContainer.withAlpha(80) : null,
+                        value: MappingMode.grid,
+                        groupValue: selectedMode,
+                        onChanged: (val) => setDialogState(() => selectedMode = val!),
+                        secondary: const Icon(Icons.grid_on_rounded),
+                        title: const Text("Zone / Polygone (Grille)", style: TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: const Text("Utilise les points comme contour pour un balayage de surface."),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text("Annuler"),
+                ),
+                FilledButton.icon(
+                  icon: const Icon(Icons.flight_takeoff_rounded, size: 18),
+                  label: const Text("Charger la mission"),
+                  onPressed: () {
+                    final feature = features[selectedFeatureIndex];
+                    Navigator.of(context).pop();
+                    _loadGpxFeature(feature, selectedMode);
+                  },
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _loadGpxFeature(GpxFeature feature, MappingMode targetMode) async {
+    final mapProvider = Provider.of<MapProvider>(context, listen: false);
+    final mapController = mapProvider.mapController;
+    final listenables = Provider.of<ValueListenables>(context, listen: false);
+
+    listenables.mappingMode = targetMode;
+
+    if (targetMode == MappingMode.waypoint) {
+      listenables.waypoints = List.from(feature.points);
+      listenables.polygon = [];
+      listenables.centerline = [];
+    } else if (targetMode == MappingMode.corridor) {
+      listenables.centerline = List.from(feature.points);
+      listenables.waypoints = [];
+      listenables.polygon = DroneMappingEngine.generateCorridorBufferPolygon(
+        feature.points,
+        listenables.corridorWidth.toDouble(),
+      );
+    } else {
+      listenables.polygon = List.from(feature.points);
+      listenables.centerline = [];
+      listenables.waypoints = [];
+    }
+
+    if (feature.points.isNotEmpty) {
+      final bounds = LatLngBounds.fromPoints(feature.points);
+      mapController.fitCamera(
+        CameraFit.bounds(
+          bounds: bounds,
+          padding: const EdgeInsets.all(80),
+          maxZoom: 18.0,
+        ),
+      );
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Mission GPX chargée : ${feature.name} (${feature.pointCount} points)"),
+        ),
+      );
+    }
+  }
+
   Future<void> _exportForDJIFly(ValueListenables listenables) async {
     final exportFilename = await _promptForExportFilename(
       defaultName: 'mission',
@@ -761,8 +987,8 @@ class ExportBarState extends State<ExportBar> {
               const SizedBox(height: 14),
               _buildSectionCard(
                 context: context,
-                title: 'Mapping area',
-                subtitle: 'Import or export polygon boundary',
+                title: 'Mapping area & Missions',
+                subtitle: 'Import GPX/KML routes or export polygon boundary',
                 icon: Icons.map_rounded,
                 accent: colorScheme.tertiary,
                 child: Column(
@@ -771,8 +997,21 @@ class ExportBarState extends State<ExportBar> {
                       children: [
                         Expanded(
                           child: Tooltip(
-                            message:
-                                'This will override the current mapping area',
+                            message: 'Importer une trace ou des points GPX',
+                            child: _buildGridActionButton(
+                              context: context,
+                              title: 'Import GPX',
+                              subtitle: 'Trace / Waypoints',
+                              icon: Icons.timeline_rounded,
+                              onPressed: () => _importFromGpx(listenables),
+                              accent: colorScheme.primary,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Tooltip(
+                            message: 'Importer un contour ou itinéraire KML',
                             child: _buildGridActionButton(
                               context: context,
                               title: 'Import KML',
@@ -791,21 +1030,28 @@ class ExportBarState extends State<ExportBar> {
                             subtitle: 'Save boundary',
                             icon: Icons.download,
                             onPressed: () => _exportAreaToKml(listenables),
-                            accent: colorScheme.primary,
+                            accent: colorScheme.secondary,
                           ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 14),
                     DragTarget<String>(
-                      onWillAcceptWithDetails: (details) =>
-                          details.data.toLowerCase().endsWith('.kml'),
+                      onWillAcceptWithDetails: (details) {
+                        final path = details.data.toLowerCase();
+                        return path.endsWith('.kml') || path.endsWith('.gpx');
+                      },
                       onAcceptWithDetails: (details) async {
                         final filePath = details.data;
                         if (filePath.isEmpty) return;
                         final file = File(filePath);
                         if (!file.existsSync()) return;
-                        await _importKmlContent(await file.readAsString());
+                        final lower = filePath.toLowerCase();
+                        if (lower.endsWith('.gpx')) {
+                          await _importGpxContent(await file.readAsString());
+                        } else if (lower.endsWith('.kml')) {
+                          await _importKmlContent(await file.readAsString());
+                        }
                       },
                       builder: (context, candidateData, rejectedData) {
                         final isActive = candidateData.isNotEmpty;
@@ -847,7 +1093,7 @@ class ExportBarState extends State<ExportBar> {
                               const SizedBox(width: 12),
                               Flexible(
                                 child: Text(
-                                  'Drop a .kml file here to import the mapping area',
+                                  'Déposez un fichier .gpx ou .kml ici pour importer',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     color: isActive
@@ -865,72 +1111,7 @@ class ExportBarState extends State<ExportBar> {
                   ],
                 ),
               ),
-              const SizedBox(height: 16),
-              Container(
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(22),
-                  border: Border.all(
-                    width: 1.5,
-                    color: colorScheme.error.withAlpha(200),
-                  ),
-                  color: colorScheme.errorContainer.withAlpha(25),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(18.0),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        width: 42,
-                        height: 42,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: colorScheme.error.withAlpha(25),
-                        ),
-                        child: Icon(
-                          Icons.warning_amber_rounded,
-                          color: colorScheme.error,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Warning',
-                              style: TextStyle(
-                                fontSize: 20,
-                                color: colorScheme.onErrorContainer,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            Text(
-                              'I am not responsible for any damage or loss of equipment or data. Use at your own risk.',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: colorScheme.onErrorContainer,
-                                height: 1.5,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'If you notice any issues during the mission, please stop the mission immediately.',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: colorScheme.onErrorContainer,
-                                height: 1.5,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+
             ],
           );
         }),

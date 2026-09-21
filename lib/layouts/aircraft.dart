@@ -1,3 +1,4 @@
+import 'package:dji_mapper/core/geometry_validator.dart';
 import 'package:dji_mapper/shared/aircraft_settings.dart';
 import 'package:dji_waypoint_engine/engine.dart';
 import 'package:dji_mapper/components/text_field.dart';
@@ -33,6 +34,22 @@ class _AircraftBarState extends State<AircraftBar> {
     final colorScheme = Theme.of(context).colorScheme;
 
     return Consumer<ValueListenables>(builder: (context, listenables, child) {
+      final hasShape = listenables.mappingMode == MappingMode.corridor
+          ? (listenables.centerline.length >= 2 || listenables.polygon.length >= 2)
+          : (listenables.mappingMode == MappingMode.waypoint
+              ? (listenables.waypoints.length >= 2 || listenables.centerline.length >= 2 || listenables.polygon.length >= 2)
+              : listenables.polygon.length >= 3);
+
+      final validation = hasShape
+          ? (listenables.mappingMode == MappingMode.corridor
+              ? GeometryValidator.validateCorridor(
+                  listenables.centerline.isNotEmpty ? listenables.centerline : listenables.polygon)
+              : (listenables.mappingMode == MappingMode.waypoint
+                  ? GeometryValidator.validateCorridor(
+                      listenables.waypoints.isNotEmpty ? listenables.waypoints : listenables.centerline)
+                  : GeometryValidator.validatePolygon(listenables.polygon)))
+          : null;
+
       return SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
         child: Column(
@@ -74,9 +91,165 @@ class _AircraftBarState extends State<AircraftBar> {
                       },
                     ),
                   ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _buildModeSelectorCard(
+                      context: context,
+                      title: "Waypoints",
+                      subtitle: "Trace / GPX",
+                      icon: Icons.timeline_rounded,
+                      isSelected:
+                          listenables.mappingMode == MappingMode.waypoint,
+                      onTap: () {
+                        setState(() {
+                          listenables.mappingMode = MappingMode.waypoint;
+                        });
+                        _updateSettings(listenables);
+                      },
+                    ),
+                  ),
                 ],
               ),
             ),
+            if (hasShape) ...[
+              const SizedBox(height: 12),
+              _buildSectionCard(
+                context: context,
+                title: "Validation & Outils de Forme",
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: validation != null && validation.isValid
+                            ? Colors.green.withAlpha(25)
+                            : colorScheme.error.withAlpha(25),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: validation != null && validation.isValid
+                              ? Colors.green.withAlpha(90)
+                              : colorScheme.error.withAlpha(90),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            validation != null && validation.isValid
+                                ? Icons.verified_rounded
+                                : Icons.error_outline_rounded,
+                            size: 18,
+                            color: validation != null && validation.isValid
+                                ? Colors.green
+                                : colorScheme.error,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              validation != null
+                                  ? (validation.isValid
+                                      ? 'Géométrie conforme (${validation.issues.length} avertissement(s))'
+                                      : 'Géométrie non conforme (${validation.issues.length} anomalie(s))')
+                                  : 'Aucune forme',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: validation != null && validation.isValid
+                                    ? Colors.green
+                                    : colorScheme.error,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        FilledButton.tonalIcon(
+                          icon: const Icon(Icons.auto_fix_high_rounded, size: 15),
+                          label: const Text('Auto-réparer', style: TextStyle(fontSize: 11.5)),
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          ),
+                          onPressed: () {
+                            if (listenables.mappingMode == MappingMode.corridor) {
+                              final active = listenables.centerline.isNotEmpty ? listenables.centerline : listenables.polygon;
+                              if (active.length >= 2) {
+                                listenables.centerline = GeometryValidator.repairCorridor(active);
+                                listenables.notify();
+                              }
+                            } else {
+                              if (listenables.polygon.length >= 3) {
+                                listenables.polygon = GeometryValidator.repairPolygon(listenables.polygon);
+                                listenables.notify();
+                              }
+                            }
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Forme auto-réparée avec succès !'), duration: Duration(seconds: 1)),
+                            );
+                          },
+                        ),
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.turn_right_rounded, size: 15),
+                          label: const Text('Angles 90°', style: TextStyle(fontSize: 11.5)),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          ),
+                          onPressed: () {
+                            if (listenables.polygon.length >= 3) {
+                              listenables.polygon = GeometryValidator.orthogonalizePolygon(listenables.polygon);
+                              listenables.notify();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Orthogonalisation à 90° appliquée.'), duration: Duration(seconds: 1)),
+                              );
+                            }
+                          },
+                        ),
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.content_cut_rounded, size: 15),
+                          label: const Text('Simplifier', style: TextStyle(fontSize: 11.5)),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          ),
+                          onPressed: () {
+                            if (listenables.polygon.length >= 4) {
+                              listenables.polygon = GeometryValidator.simplifyPolygon(listenables.polygon, toleranceMeters: 2.0);
+                              listenables.notify();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Polygone simplifié : ${listenables.polygon.length} sommets restants.'), duration: const Duration(seconds: 1)),
+                              );
+                            }
+                          },
+                        ),
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.swap_horiz_rounded, size: 15),
+                          label: const Text('Inverser sens', style: TextStyle(fontSize: 11.5)),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          ),
+                          onPressed: () {
+                            if (listenables.mappingMode == MappingMode.corridor) {
+                              listenables.centerline = listenables.centerline.reversed.toList();
+                            } else if (listenables.mappingMode == MappingMode.waypoint) {
+                              listenables.waypoints = listenables.waypoints.reversed.toList();
+                            } else {
+                              listenables.polygon = listenables.polygon.reversed.toList();
+                            }
+                            listenables.notify();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Sens de parcours inversé.'), duration: Duration(seconds: 1)),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             _buildSectionCard(
               context: context,
@@ -252,6 +425,26 @@ class _AircraftBarState extends State<AircraftBar> {
                         ),
                       ],
                     ),
+                    CustomTextField(
+                      labelText: "Gimbal Angle",
+                      unit: "°",
+                      min: -90,
+                      max: 0,
+                      defaultValue: listenables.cameraAngle,
+                      onChanged: (degrees) {
+                        listenables.cameraAngle = degrees.round();
+                        _updateSettings(listenables);
+                      },
+                    ),
+                  ],
+                ),
+              )
+            else if (listenables.mappingMode == MappingMode.waypoint)
+              _buildSectionCard(
+                context: context,
+                title: "Waypoint Mission Parameters",
+                child: Column(
+                  children: [
                     CustomTextField(
                       labelText: "Gimbal Angle",
                       unit: "°",

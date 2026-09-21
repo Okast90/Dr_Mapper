@@ -27,8 +27,12 @@ class _InfoState extends State<Info> {
           (listenables.centerline.length >= 2 || listenables.polygon.length >= 2);
       final isGridValid = listenables.mappingMode == MappingMode.grid &&
           listenables.polygon.length > 2;
+      final isWaypointValid = listenables.mappingMode == MappingMode.waypoint &&
+          (listenables.waypoints.isNotEmpty ||
+              listenables.centerline.isNotEmpty ||
+              listenables.polygon.isNotEmpty);
 
-      if (isCorridorValid || isGridValid) {
+      if (isCorridorValid || isGridValid || isWaypointValid) {
         final engine = DroneMappingEngine(
           altitude: listenables.altitude.toDouble(),
           forwardOverlap: listenables.forwardOverlap / 100,
@@ -42,7 +46,19 @@ class _InfoState extends State<Info> {
           groundOffset: listenables.groundOffset.toDouble(),
         );
 
-        if (listenables.mappingMode == MappingMode.corridor) {
+        if (listenables.mappingMode == MappingMode.waypoint) {
+          final activeWaypoints = listenables.waypoints.isNotEmpty
+              ? listenables.waypoints
+              : (listenables.centerline.isNotEmpty
+                  ? listenables.centerline
+                  : listenables.polygon);
+          missionWaypoints = engine.generateDirectWaypoints(
+            waypoints: activeWaypoints,
+            createCameraPoints: listenables.createCameraPoints,
+            homePoint: listenables.homePoint,
+          );
+          area = 0;
+        } else if (listenables.mappingMode == MappingMode.corridor) {
           final activeCenterline = listenables.centerline.isNotEmpty
               ? listenables.centerline
               : listenables.polygon;

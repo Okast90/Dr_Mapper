@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:dji_mapper/core/geometry_validator.dart';
 import 'package:latlong2/latlong.dart';
 
 class DroneMappingEngine {
@@ -554,6 +555,16 @@ class DroneMappingEngine {
   ]) {
     if (polygon.length < 3) return [];
 
+    // Safeguard against invalid/self-crossing/zero-area shapes
+    final validation = GeometryValidator.validatePolygon(polygon);
+    if (!validation.isValid) {
+      final repaired = GeometryValidator.repairPolygon(polygon);
+      if (repaired.length < 3 || !GeometryValidator.validatePolygon(repaired).isValid) {
+        return [];
+      }
+      polygon = repaired;
+    }
+
     var localPolygon = _latLngToMeters(polygon);
     var origin = polygon[0];
 
@@ -1066,6 +1077,13 @@ class DroneMappingEngine {
   }) {
     if (centerline.length < 2) return [];
 
+    final validation = GeometryValidator.validateCorridor(centerline);
+    if (!validation.isValid) {
+      final repaired = GeometryValidator.repairCorridor(centerline);
+      if (repaired.length < 2) return [];
+      centerline = repaired;
+    }
+
     final origin = centerline[0];
     final localCenterline = _latLngToMeters(centerline);
     final alongSpacing = pathSpacing > 0 ? pathSpacing : 20.0;
@@ -1188,6 +1206,34 @@ class DroneMappingEngine {
     }
 
     return _metersToLatLng(allWaypoints, origin);
+  }
+
+  /// Generates mission waypoints directly from a path/sequence of waypoints (e.g. from GPX)
+  List<LatLng> generateDirectWaypoints({
+    required List<LatLng> waypoints,
+    required bool createCameraPoints,
+    LatLng? homePoint,
+  }) {
+    if (waypoints.isEmpty) return [];
+    if (waypoints.length == 1) return List<LatLng>.from(waypoints);
+
+    var result = List<LatLng>.from(waypoints);
+
+    // If home point is closer to end than start, reverse for optimal flight path
+    if (homePoint != null && result.length >= 2) {
+      final origin = result[0];
+      final homeP = _latLngToPoint(homePoint, origin);
+      final pFirst = _latLngToPoint(result.first, origin);
+      final pLast = _latLngToPoint(result.last, origin);
+      final distStart = _distance(pFirst, homeP);
+      final distEnd = _distance(pLast, homeP);
+
+      if (distEnd < distStart) {
+        result = result.reversed.toList();
+      }
+    }
+
+    return result;
   }
 
   static final List<double> _standardSpeeds = [

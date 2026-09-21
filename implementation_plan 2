@@ -1,0 +1,86 @@
+# Implémentation de l'import GPX et du plan de vol par waypoints
+
+Ce projet ajoute la prise en charge complète des fichiers **GPX** (`.gpx`) dans DJI-Mapper, permettant aux utilisateurs d'importer des traces GPS, routes ou waypoints et d'exécuter des plans de vol selon 3 modes adaptés (Suivi direct de Waypoints, Corridor linéaire, et Zone polygonale).
+
+---
+
+## Fonctionnalités Clés
+
+1. **Import de fichiers GPX (`.gpx`)** :
+   - Prise en charge des balises GPX standards : `<trk>` / `<trkseg>` / `<trkpt>` (traces), `<rte>` / `<rtept>` (itinéraires) et `<wpt>` (waypoints).
+   - Extraction des coordonnées GPS (`lat`, `lon`), de l'altitude (`ele`) et des noms de points.
+   - Glisser-déposer (*Drag & Drop*) et sélecteur de fichier (*FilePicker*).
+
+2. **Dialogue de sélection & choix de mode** :
+   - Si le fichier GPX contient plusieurs traces/routes, l'utilisateur peut choisir celle à importer.
+   - Choix du mode d'application :
+     - **Mode Suivi direct de Waypoints (Wayline Mission)** : Le drone suit fidèlement la séquence des points GPS importés.
+     - **Mode Corridor (Axe linéaire)** : La trace sert d'axe central pour générer un couloir de photogrammétrie avec largeur de buffer et passes multiples.
+     - **Mode Polygone (Zone fermée)** : Les points forment le contour d'une zone pour un balayage photogrammétrique (boustrophédon / crosshatch).
+
+3. **Nouveau mode de vol `MappingMode.waypoint`** :
+   - Ajout du mode `waypoint` dans `ValueListenables` et dans le sélecteur de mode de l'onglet *Aircraft*.
+   - Affichage interactif sur la carte avec numérotation des waypoints, flèches de direction, ligne de décollage et d'atterrissage vers le point Home.
+
+4. **Calculs & Statistiques de vol (`info.dart`)** :
+   - Calcul de la distance totale, du temps de vol estimé, de la consommation de batterie et du nombre de déclenchements photo.
+
+5. **Export vers DJI Fly et Litchi** :
+   - Export en **KMZ / WPML** pour l'application DJI Fly (action à chaque waypoint, vitesse, altitude, orientation de la nacelle).
+   - Export en **CSV** pour Litchi.
+
+---
+
+## Proposed Changes
+
+### Core & Models
+
+#### [MODIFY] [drone_mapper_format.dart](file:///d:/Nouveau%20dossier/DJI-Mapper-main/lib/core/drone_mapper_format.dart)
+- Ajouter `fromGpxString(String gpx)` à `DroneMapperXml`.
+- Ajouter des helpers d'extraction structurée des segments GPX (nom, points `LatLng`, altitudes `ele`).
+
+#### [MODIFY] [value_listeneables.dart](file:///d:/Nouveau%20dossier/DJI-Mapper-main/lib/shared/value_listeneables.dart)
+- Étendre `MappingMode` avec `waypoint` : `enum MappingMode { grid, corridor, waypoint }`.
+- Ajouter la gestion des points de waypoints personnalisés et notifier les écouteurs.
+
+#### [MODIFY] [drone_mapping_engine.dart](file:///d:/Nouveau%20dossier/DJI-Mapper-main/lib/core/drone_mapping_engine.dart)
+- Ajouter les fonctions utilitaires pour le calcul de trajectoires directes de waypoints et la génération des prises de vue le long du tracé GPX.
+
+---
+
+### Interface Utilisateur (UI)
+
+#### [MODIFY] [export.dart](file:///d:/Nouveau%20dossier/DJI-Mapper-main/lib/layouts/export.dart)
+- Ajouter le bouton **"Import GPX"** dans la section *Mapping area / Missions*.
+- Mettre à jour la zone de Drag & Drop pour accepter les fichiers `.gpx` et `.kml`.
+- Implémenter le dialogue de sélection de trace GPX et de choix du mode de mission (Waypoints direct, Corridor, Polygone).
+
+#### [MODIFY] [aircraft.dart](file:///d:/Nouveau%20dossier/DJI-Mapper-main/lib/layouts/aircraft.dart)
+- Ajouter la carte de sélection du mode **"Waypoints"** (à côté de *Grid* et *Corridor*).
+- Afficher les paramètres pertinents selon le mode sélectionné (actions aux points, délai, altitude, vitesse, déclenchement photo).
+
+#### [MODIFY] [home.dart](file:///d:/Nouveau%20dossier/DJI-Mapper-main/lib/layouts/home.dart)
+- Prendre en charge `MappingMode.waypoint` pour :
+  - La génération des waypoints et des lignes de vol.
+  - Le tracé interactif sur la carte avec les marqueurs numérotés et les flèches de sens de vol.
+  - Le centrage automatique / zoom sur l'étendue des points GPX importés.
+
+#### [MODIFY] [info.dart](file:///d:/Nouveau%20dossier/DJI-Mapper-main/lib/layouts/info.dart)
+- Adapter les calculs télémétriques (distance de vol, durée estimée, nombre de photos, batteries nécessaires) pour le mode `MappingMode.waypoint`.
+
+---
+
+## Verification Plan
+
+### Automated Tests
+- Exécuter la suite de tests unitaires existante et ajouter des tests unitaires pour l'analyseur GPX :
+  ```bash
+  flutter test
+  ```
+
+### Manual Verification
+1. **Import GPX - Mode Waypoints direct** : Importer un fichier GPX avec plusieurs waypoints / trace, vérifier l'affichage des points numérotés sur la carte, la trajectoire reliée et les flèches de sens de vol.
+2. **Import GPX - Mode Corridor** : Importer une trace GPX comme axe central d'un corridor, vérifier la génération du couloir et des passes de vol.
+3. **Import GPX - Mode Polygone** : Importer un contour GPX et vérifier la grille de photogrammétrie.
+4. **Calculs dans Info** : Vérifier que la distance, la durée et les photos s'actualisent instantanément.
+5. **Export DJI Fly KMZ & Litchi CSV** : Générer les fichiers d'export et vérifier la conformité XML / KMZ et CSV.
